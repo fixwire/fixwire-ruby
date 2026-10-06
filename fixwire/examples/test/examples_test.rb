@@ -28,8 +28,7 @@ class ExamplesTest < Minitest::Test
     port = free_port
     log = "#{Dir.tmpdir}/fixwire-shop-api-#{port}.log"
     env = @env.merge("INVENTORY_URL" => @inventory.url)
-    pid = start_server(env, "bundle", "exec", "rackup", "shop-api/config.ru", "-p", port.to_s, "-o", "127.0.0.1",
-                       chdir: ROOT, %i[out err] => log)
+    pid = start_server(env, "shop-api/config.ru", port, chdir: ROOT, %i[out err] => log)
     wait_for(port)
     base = "http://127.0.0.1:#{port}"
 
@@ -106,17 +105,24 @@ class ExamplesTest < Minitest::Test
 
   private
 
-  # Starts a server so the system can stop it: on Windows in a process group of its own, so
-  # Ctrl-Break reaches it alone. Ruby runs Bundler itself (no bundle.bat in between).
-  def start_server(env, *command, **options)
-    options[:new_pgroup] = true if Gem.win_platform?
-    spawn(env, RbConfig.ruby, "-S", *command, **options)
+  # Starts Puma with the app so the system can stop it: one process (Ruby loads Bundler and runs
+  # Puma itself; bundle exec hands over to a second process on Windows), with Puma's control
+  # server for Windows.
+  def start_server(env, app, port, **)
+    @control = free_port
+    puma = [RbConfig.ruby, "-rbundler/setup", "-e", "load Gem.bin_path('puma', 'puma')", "--", app, "-b", "tcp://127.0.0.1:#{port}",
+            "--control-url", "tcp://127.0.0.1:#{@control}", "--control-token", "examples"]
+    spawn(env, *puma, **)
   end
 
-  # Stops it as the system stops a program: SIGTERM, or Ctrl-Break on Windows (Ruby's :INT for a
-  # process group).
+  # Stops it as the system stops a program: SIGTERM; on Windows, which has no signal for that,
+  # through Puma's control server, as `pumactl stop` does.
   def stop_server(pid)
-    Process.kill(Gem.win_platform? ? :INT : :TERM, pid)
+    if Gem.win_platform?
+      Net::HTTP.get(URI("http://127.0.0.1:#{@control}/stop?token=examples"))
+    else
+      Process.kill(:TERM, pid)
+    end
     Process.wait(pid)
   end
 
