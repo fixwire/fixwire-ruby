@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: fixwire, Ruby ${{ matrix.ruby }}, ${{ matrix.os }}${{ matrix.sidekiq && format(', Sidekiq {0}', matrix.sidekiq) || '' }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        ruby: ["3.3", "3.4", "4.0"]
+        include:
+          - { os: ubuntu-latest, ruby: "3.2", sidekiq: "~> 7.0" } # the oldest Ruby, and Sidekiq 7
+          - { os: macos-latest, ruby: "3.4" }
+    env:
+      SIDEKIQ_VERSION: ${{ matrix.sidekiq || '>= 7.0' }}
+    defaults:
+      run:
+        working-directory: fixwire
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+          working-directory: fixwire
+      - name: test (in-process, child processes, Sidekiq)
+        run: bundle exec rake test
+      - name: examples against a fake ingest
+        working-directory: fixwire/examples
+        run: bundle install && bundle exec ruby test/examples_test.rb
+
+  rails:
+    name: fixwire-rails, Rails ${{ matrix.rails }}, Ruby ${{ matrix.ruby }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { rails: "7.1", ruby: "3.2", json: "< 3" }
+          - { rails: "7.2", ruby: "3.3" }
+          - { rails: "8.0", ruby: "3.4", json: "< 3" }
+          - { rails: "8.1", ruby: "3.2" }
+          - { rails: "8.1", ruby: "4.0" }
+    env:
+      RAILS_VERSION: "~> ${{ matrix.rails }}.0"
+      JSON_VERSION: ${{ matrix.json }}
+    defaults:
+      run:
+        working-directory: fixwire-rails
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+          working-directory: fixwire-rails
+      - name: test (an in-memory Rails app)
+        run: bundle exec rake test
+      - name: example app against a fake ingest
+        if: matrix.rails == '8.1'
+        working-directory: fixwire-rails/example
+        run: bundle install && bundle exec ruby test/example_test.rb
+
+  lint:
+    name: rubocop
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+          working-directory: fixwire
+      - run: bundle exec rubocop
+        working-directory: fixwire
+      - run: bundle install && bundle exec rubocop
+        working-directory: fixwire-rails

@@ -9,6 +9,8 @@ gem "fixwire", path: "../fixwire"
 group :development do
   gem "minitest", "~> 5.25"
   gem "rails", ENV.fetch("RAILS_VERSION", ">= 7.1")
+  # Rails 7.1 and 8.0 pass an option json 3 removed: CI pins json < 3 for them.
+  gem "json", ENV.fetch("JSON_VERSION") unless ENV.fetch("JSON_VERSION", "").empty?
   gem "rake", "~> 13.0"
   gem "rubocop", "~> 1.80", require: false
   gem "rubocop-minitest", "~> 0.38", require: false

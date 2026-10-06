@@ -17,7 +17,9 @@ Gem::Specification.new do |spec|
   spec.require_paths = ["lib"]
   spec.metadata = {
     "homepage_uri" => "https://fixwire.io",
-    "source_code_uri" => "https://github.com/fixwire/fixwire/tree/main/sdks/ruby/fixwire",
+    "source_code_uri" => "https://github.com/fixwire/fixwire-ruby/tree/main/fixwire",
+    "changelog_uri" => "https://github.com/fixwire/fixwire-ruby/blob/main/CHANGELOG.md",
+    "bug_tracker_uri" => "https://github.com/fixwire/fixwire-ruby/issues",
     "rubygems_mfa_required" => "true"
   }
 end

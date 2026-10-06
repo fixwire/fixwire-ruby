@@ -10,5 +10,5 @@ group :development do
   gem "rake", "~> 13.0"
   gem "rubocop", "~> 1.80", require: false
   gem "rubocop-minitest", "~> 0.38", require: false
-  gem "sidekiq", ">= 7.0"
+  gem "sidekiq", ENV.fetch("SIDEKIQ_VERSION", ">= 7.0")
 end
