@@ -33,9 +33,9 @@ class FakeIngest
   def requests(path = nil) = @lock.synchronize { @received.select { |r| path.nil? || r[:path] == path } }
 
   # Starts the SDK with this transport and makes its hub current.
-  def init(**)
+  def init(**, &)
     Fixwire.init(dsn: DSN, service_name: "shop", project_root: File.expand_path("..", __dir__), transport: self,
-                 auto_session_tracking: false, breadcrumbs_logger: false, trace_net_http: false, **)
+                 auto_session_tracking: false, breadcrumbs_logger: false, trace_net_http: false, **, &)
   end
 
   def log_records(path = "/v1/logs")

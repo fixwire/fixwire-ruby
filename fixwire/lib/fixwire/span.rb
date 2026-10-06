@@ -29,7 +29,7 @@ module Fixwire
     MAX_CHILDREN = 1000
     MAX_ATTRIBUTES = 128
     # W3C's limits for a caller's tracestate and baggage: longer ones, or ones holding a control
-    # character, are not passed on.
+    # character other than tab (W3C's list whitespace), are not passed on.
     MAX_TRACESTATE = 512
     MAX_BAGGAGE = 8192
     CONTROL = /[\x00-\x08\x0A-\x1F\x7F]/
@@ -181,16 +181,18 @@ module Fixwire
     end
 
     # [trace_id, parent_span_id, sampled] from a W3C traceparent, or nil unless it is well formed:
-    # version 00, a non-zero trace id of 32 hex digits, a non-zero span id of 16, 2 for the flags.
+    # version 00, exactly four fields of lower-case hex (an upper-case one is not W3C's, so the
+    # header is ignored, not lowered), a non-zero trace id of 32 digits, a non-zero span id of 16,
+    # 2 for the flags.
     def self.parse_traceparent(header)
       return nil unless header.is_a?(String)
 
       parts = header.strip.split("-", -1)
       return nil unless parts.size == 4 && parts[0] == "00" && parts[1].size == 32 && parts[2].size == 16 && parts[3].size == 2
-      return nil unless parts.join.match?(/\A\h+\z/)
+      return nil unless parts.join.match?(/\A[0-9a-f]+\z/)
       return nil if parts[1].delete("0").empty? || parts[2].delete("0").empty?
 
-      [parts[1].downcase, parts[2].downcase, parts[3].to_i(16).odd?]
+      [parts[1], parts[2], parts[3].to_i(16).odd?]
     end
 
     # A caller's tracestate or baggage as it may be passed on: nil when it is longer than limit

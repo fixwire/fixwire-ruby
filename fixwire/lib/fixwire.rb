@@ -25,7 +25,10 @@ require_relative "fixwire/instrumentation"
 # Without a DSN (and without FIXWIRE_DSN) the SDK does nothing.
 module Fixwire
   class << self
-    # Starts the SDK: from keywords, a block, or both. Returns the client.
+    # Starts the SDK: from keywords, a block, or both. Returns the client. Never raises: an option
+    # that doesn't exist is said on stderr and ignored; a broken DSN is said on stderr and leaves the
+    # SDK off, and so does an init that fails otherwise (the block raising, an option it can't
+    # read), which returns nil.
     def init(**)
       opts = Options.new(**)
       yield opts if block_given?
@@ -37,6 +40,11 @@ module Fixwire
         install_at_exit
       end
       client
+    rescue StandardError => e
+      warn("fixwire: init failed, so the SDK is off: #{e.message}")
+      Hub.main = Hub.new(nil, Hub.main&.scope&.dup || Scope.new)
+      Hub.current = Hub.main
+      nil
     end
 
     def client = Hub.current.client

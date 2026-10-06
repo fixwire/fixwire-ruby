@@ -2,6 +2,7 @@
 
 require_relative "test_helper"
 require "socket"
+require "tmpdir"
 
 # What hostile or outsized input can't do: hang the app, sink a batch, leak past redaction or
 # travel on to other services.
@@ -139,6 +140,28 @@ class LimitsTest < Minitest::Test
     assert_equal(["error 10", "error 1"], chain.values_at(0, -1).map { |x| x["message"] })
   end
 
+  def test_caches_at_most_64_source_files_and_32_mb
+    Dir.mktmpdir do |dir|
+      clear_sources
+      small = (0..64).map { |i| File.join(dir, "small#{i}.rb").tap { |path| File.write(path, "line #{i}\n") } }
+      small.each { |path| Fixwire::Frames.source(path) }
+
+      assert_equal small[1..], sources.keys, "64 files: the oldest is left out"
+      clear_sources
+      line = "#{"a" * 1023}\n" # 8,192 lines: 8 MB on disk, 8,380,416 bytes of lines
+      big = (0..4).map { |i| File.join(dir, "big#{i}.rb").tap { |path| File.write(path, line * 8192) } }
+      big.first(4).each { |path| Fixwire::Frames.source(path) }
+
+      assert_equal big.first(4), sources.keys, "4 such files fit in 32 MB"
+      Fixwire::Frames.source(big[4])
+
+      assert_equal big[1..], sources.keys, "a fifth goes past 32 MB: the oldest is left out"
+      assert_operator Fixwire::Frames.instance_variable_get(:@cached), :<=, 32 * 1024 * 1024
+    end
+  ensure
+    clear_sources
+  end
+
   def test_caps_span_attributes
     @ingest.init(traces_sample_rate: 1.0)
     span = Fixwire.start_span("wide", op: "task", attributes: (1..100).to_h { |i| ["a#{i}", i] })
@@ -195,6 +218,24 @@ class LimitsTest < Minitest::Test
     assert_equal "card of [REDACTED:email] declined", @ingest.spans.first["status"]["message"]
   end
 
+  def test_masks_feedback_but_sends_the_apps_configuration_as_given
+    @ingest.init(release: "api@1.2.3.example", environment: "ops@example.com", server_name: "ada@example.com", max_value_length: 64)
+    Fixwire.capture_feedback(message: "x" * 100, name: "ada@example.com", email: "ada@example.com",
+                             url: "https://shop.test/?access_token=#{GOOGLE}")
+    Fixwire.capture_check_in("ops@example.com", :ok)
+    Fixwire.capture_message("x")
+    Fixwire.flush
+    feedback = @ingest.requests("/v1/feedback").first[:body]
+    check_in = @ingest.requests("/v1/check-ins/ops@example.com").first[:body]
+
+    assert_equal ["#{"x" * 61}...", "[REDACTED:email]", "[REDACTED:email]", "https://shop.test/?access_token=[REDACTED:secret_assignment]"],
+                 feedback.values_at("message", "name", "email", "url")
+    assert_equal ["api@1.2.3.example", "ops@example.com"], feedback.values_at("release", "environment")
+    assert_equal "ops@example.com", check_in["environment"], "the monitor's slug too, in the path"
+    assert_equal ["api@1.2.3.example", "ops@example.com", "ada@example.com"],
+                 FakeIngest.resource(@ingest.requests("/v1/logs").first).values_at("service.version", "deployment.environment.name", "host.name")
+  end
+
   def test_passes_no_oversized_trace_state_on
     @ingest.init(traces_sample_rate: 1.0)
     traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
@@ -216,12 +257,16 @@ class LimitsTest < Minitest::Test
     end
 
     assert_equal [[512, 8192], [nil, nil]], sizes, "dropped whole, not cut"
-    ["v=1\nx=2", "v=1\x00", "v=\x7F"].each do |control|
+    ["v=1\nx=2", "v=1\x00", "v=\x7F", "v=1,\x1Fx=2"].each do |control|
       span = Fixwire.continue_trace(traceparent, control, control, "control")
       span.finish
 
       assert_equal [nil, nil], [span.tracestate, span.baggage], control.inspect
     end
+    span = Fixwire.continue_trace(traceparent, "v=1,\tx=2", "k=1;\tp=2,\tl=3", "tab")
+    span.finish
+
+    assert_equal ["v=1,\tx=2", "k=1;\tp=2,\tl=3"], [span.tracestate, span.baggage], "a tab is W3C's list whitespace"
   end
 
   def test_continues_only_well_formed_traceparents
@@ -231,9 +276,18 @@ class LimitsTest < Minitest::Test
     ["01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", "#{good}-extra", "00-4bf92f3577b34da6a3ce929d0e0e473-00f067aa0ba902b7-01",
      "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b-01", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-1",
      "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-0g", "00-4bf92f3577b34da6a3ce929d0e0e47g6-00f067aa0ba902b7-01",
-     nil, 42].each do |bad|
+     "00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01", "00-4bf92f3577b34da6a3ce929d0e0e473A-00f067aa0ba902b7-01",
+     "00-4bf92f3577b34da6a3ce929d0e0e4736-00F067AA0BA902B7-01", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-0A",
+     "00-00000000000000000000000000000000-00f067aa0ba902b7-01", "00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01",
+     "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7", nil, 42].each do |bad|
       assert_nil Fixwire::Span.parse_traceparent(bad), bad.inspect
     end
+    @ingest.init(traces_sample_rate: 1.0)
+    span = Fixwire.continue_trace("00-4BF92F3577B34DA6A3CE929D0E0E4736-00F067AA0BA902B7-01", nil, nil, "upper")
+    span.finish
+
+    refute_equal "4bf92f3577b34da6a3ce929d0e0e4736", span.trace_id, "an upper-case header is ignored, not lowered"
+    assert_nil span.parent_span_id
   end
 
   def test_propagates_traces_to_the_targets_only
@@ -277,7 +331,25 @@ class LimitsTest < Minitest::Test
     Fixwire.flush
 
     assert_in_delta 7200, worker.send(:paused_for, "feedback"), 5, "a 429 without Fixwire-Rate-Limits pauses all"
-    assert_equal 1, @ingest.requests("/v1/logs").size, "and is not retried"
+    assert_equal 1, @ingest.requests("/v1/logs").size, "and its retry, over 5 minutes away, is dropped"
+  end
+
+  def test_a_429_is_tried_again_after_its_pause_within_the_same_four_sends
+    [[[200, {}], 2, true], [[503, {}], 4, false], [[429, { "Fixwire-Rate-Limits" => "0:error" }], 4, false]].each do |later, sends, sent|
+      times = []
+      @ingest = FakeIngest.new
+      @ingest.answer = lambda do |n, _path|
+        times << now
+        n.zero? ? [429, { "Fixwire-Rate-Limits" => "1:error" }] : later
+      end
+      @ingest.init
+      worker.retry_first = 0.05
+      Fixwire.capture_message("limited")
+
+      assert_equal sent, Fixwire.flush(5), later.inspect
+      assert_equal sends, times.size, "sent at most 4 times in all, the 429's retry among them"
+      assert_operator times[1] - times[0], :>=, 1, "the retry waits for the 429's pause"
+    end
   end
 
   def test_retries_three_times_waiting_twice_as_long_each_time
@@ -384,6 +456,13 @@ class LimitsTest < Minitest::Test
   def now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
 
   def worker = Fixwire.client.instance_variable_get(:@worker)
+
+  def sources = Fixwire::Frames.instance_variable_get(:@sources)
+
+  def clear_sources
+    Fixwire::Frames.instance_variable_set(:@sources, nil)
+    Fixwire::Frames.instance_variable_set(:@cached, nil)
+  end
 
   def raised
     yield

@@ -3,8 +3,9 @@
 require "socket"
 
 module Fixwire
-  # The SDK's options. Fixwire.init takes them as keywords (an unknown one is an error) or sets them
-  # in a block.
+  # The SDK's options. Fixwire.init takes them as keywords or sets them in a block; one that doesn't
+  # exist is said on stderr (always, not only with debug) and ignored, so that a typo neither goes
+  # unnoticed nor stops the app from starting.
   class Options
     DEFAULTS = {
       dsn: nil,                       # FIXWIRE_DSN when not set; nothing is sent without one
@@ -49,11 +50,20 @@ module Fixwire
       DEFAULTS.each { |name, value| public_send(:"#{name}=", value.dup) }
       Options.framework_defaults.each { |name, value| public_send(:"#{name}=", value.respond_to?(:call) ? value.call : value) }
       options.each do |name, value|
-        raise ArgumentError, "fixwire: no option #{name.inspect}" unless DEFAULTS.key?(name.to_sym)
+        next unknown(name) unless DEFAULTS.key?(name.to_sym)
 
         public_send(:"#{name}=", value)
       end
     end
+
+    # An option set in the init block that doesn't exist: said and ignored, as a keyword is.
+    def method_missing(name, *args)
+      return super unless name.end_with?("=") && args.size == 1
+
+      unknown(name.to_s.chomp("="))
+    end
+
+    def respond_to_missing?(name, include_private = false) = name.end_with?("=") || super
 
     # Fills in what is not set, from the environment.
     def apply_defaults!
@@ -82,6 +92,10 @@ module Fixwire
     end
 
     private
+
+    def unknown(name)
+      warn("fixwire: no option #{name.to_sym.inspect}, ignored")
+    end
 
     def env(value, name)
       return value unless blank?(value)

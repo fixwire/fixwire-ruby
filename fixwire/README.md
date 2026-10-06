@@ -148,7 +148,9 @@ A negative score opens a `user_feedback` issue for the agent run.
 | `timeout`, `shutdown_timeout` | 5 s, 2 s | Of a request to Fixwire; of the exit's sending |
 | `debug` | `FIXWIRE_DEBUG` | Log what the SDK does and drops to stderr |
 
-An option that doesn't exist is an error, so a typo doesn't go unnoticed.
+`init` never raises. An option that doesn't exist is reported on stderr and
+ignored, so a typo doesn't go unnoticed and doesn't stop the app from
+starting. A broken DSN is reported on stderr too, and the SDK stays off.
 
 `trace_propagation_targets` compares a URL without its user info, query
 and fragment. A string with `://` matches the URLs it starts

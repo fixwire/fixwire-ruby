@@ -32,8 +32,38 @@ class FixwireTest < Minitest::Test
     end
   end
 
-  def test_rejects_unknown_options
-    assert_raises(ArgumentError) { Fixwire.init(dsm: "typo") }
+  def test_reports_unknown_options_and_goes_on_without_them
+    client = nil
+    assert_output(nil, "fixwire: no option :dsm, ignored\nfixwire: no option :relase, ignored\n") do
+      client = @ingest.init(dsm: "typo") do |options|
+        options.relase = "shop@0.0.1"
+        options.release = "shop@1.2.0"
+      end
+    end
+
+    assert_predicate client, :enabled?, "the rest of the options work"
+    assert_equal "shop@1.2.0", client.options.release
+    refute_nil Fixwire.capture_message("still sent")
+    assert_raises(NoMethodError) { Fixwire::Options.new.relase } # only setters are options
+  end
+
+  def test_init_never_raises_and_leaves_the_sdk_off_when_broken
+    with_env("FIXWIRE_DSN" => nil, "FIXWIRE_DEBUG" => nil) do
+      ["https://ingest.fixwire.io", "ftp://k@host", "https://@host", "not a url at all"].each do |bad|
+        client = nil
+        assert_output(nil, /\Afixwire: .*, so the SDK is off\n\z/) { client = Fixwire.init(dsn: bad) }
+
+        refute_predicate client, :enabled?, bad
+        refute_predicate Fixwire, :initialized?
+      end
+      assert_output(nil, "") { Fixwire.init(dsn: "  ") } # no DSN: nothing to say
+      assert_output(nil, /\Afixwire: init failed, so the SDK is off: no data\n\z/) do
+        assert_nil(Fixwire.init(dsn: FakeIngest::DSN) { raise "no data" })
+      end
+      assert_output(nil, /\Afixwire: init failed, so the SDK is off: /) { assert_nil Fixwire.init(dsn: FakeIngest::DSN, project_root: 5) }
+      refute_predicate Fixwire, :initialized?
+      assert_nil Fixwire.capture_message("nobody hears this")
+    end
   end
 
   def test_does_nothing_without_a_dsn

@@ -13,7 +13,7 @@ module Fixwire
       @dsn = begin
         Dsn.parse(options.dsn) unless options.blank?(options.dsn)
       rescue ArgumentError => e
-        log(e.message)
+        warn("#{e.message}, so the SDK is off") # always, not only with debug
         nil
       end
       @budget = Budget.new(options.error_budget)

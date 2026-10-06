@@ -37,14 +37,15 @@ module Fixwire
 
   # @api private sends from a background thread, so that capturing never waits: log records and
   # spans in batches (100, or every second), check-ins and feedback at once, sessions every minute.
-  # A request with no answer or a 5xx is tried again up to 3 times, after 1, 2 and 4 seconds (or
-  # once a pause is over, when that is later), unless that is more than 5 minutes away; rate limits
-  # pause the kind of data they name. After a fork, the child starts a worker of its own.
+  # A request is sent at most 4 times in all: again after no answer or a 5xx, after 1, 2 and 4
+  # seconds, and after a 429's pause (or once any pause is over, when that is later), unless that is
+  # more than 5 minutes away; rate limits pause the kind of data they name. After a fork, the child
+  # starts a worker of its own.
   class Worker
     BATCH = 100
     LINGER = 1.0
     SESSIONS_EVERY = 60.0
-    RETRIES = 3
+    RETRIES = 3 # after the first send: 4 in all, a 429's included
     RETRY_FIRST = 1.0
     MAX_WAIT = 300
     # The protocol's limits, as JSON: an error or a message, a request of log records or spans, and
@@ -246,7 +247,8 @@ module Fixwire
       drop(category, "sending to #{path} failed: #{e.message}")
     end
 
-    # Sends a request (gzipped); one without an answer or with a 5xx waits for its next try.
+    # Sends a request (gzipped); one without an answer, with a 5xx or with a 429 waits for its next
+    # try, the 429's after its pause.
     def attempt(tries, path, category, body)
       headers = { "Authorization" => "Bearer #{@client.dsn.key}", "Content-Type" => "application/json",
                   "Content-Encoding" => "gzip", "User-Agent" => "#{SDK_NAME}/#{VERSION}" }
@@ -255,8 +257,8 @@ module Fixwire
       limit(answer, status)
       return true if status.between?(200, 299)
 
-      # A 3xx or a 4xx is a refusal: trying again won't help.
-      if (status.zero? || status >= 500) && tries < RETRIES
+      # A 3xx or another 4xx is a refusal: trying again won't help.
+      if (status.zero? || status >= 500 || status == 429) && tries < RETRIES
         later([@retry_first * (2**tries), paused_for(category)].max, tries + 1, path, category, body)
       else
         drop(category, "#{status}#{": #{answer["error"]}" if answer["error"]}")

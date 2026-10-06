@@ -11,7 +11,7 @@ module Fixwire
     # MAX_SOURCES files and MAX_CACHED bytes.
     MAX_SOURCE = 10 * 1024 * 1024
     MAX_SOURCES = 64
-    MAX_CACHED = 16 * 1024 * 1024
+    MAX_CACHED = 32 * 1024 * 1024
     SOURCES_LOCK = Mutex.new
     SDK_DIR = File.expand_path("..", __dir__)
     # "block (2 levels) in Shop::Cart#checkout" (Ruby 3.4) or "block (2 levels) in checkout"
