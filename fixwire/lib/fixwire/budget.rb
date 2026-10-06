@@ -95,16 +95,21 @@ module Fixwire
     def now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
   end
 
-  # @api private request sessions, counted per minute and user, sent as aggregates.
+  # @api private request sessions, counted per minute and user, sent as aggregates. At most
+  # MAX_USERS users are counted apart per send; past that, requests are counted without their user.
   class Sessions
+    MAX_USERS = 5000
+
     def initialize
-      @buckets = {}
       @lock = Mutex.new
+      clear
     end
 
     def record(status, device_id, at)
       minute = (at / 60).floor * 60
       @lock.synchronize do
+        device_id = nil if device_id && !@users.key?(device_id) && @users.size >= MAX_USERS
+        @users[device_id] = true if device_id
         bucket = (@buckets[[minute, device_id]] ||= { minute: minute, did: device_id, counts: [0, 0, 0] })
         bucket[:counts][{ "crashed" => 2, "errored" => 1 }.fetch(status, 0)] += 1
       end
@@ -112,13 +117,19 @@ module Fixwire
 
     def empty? = @lock.synchronize { @buckets.empty? }
 
-    def clear = @lock.synchronize { @buckets = {} }
+    def clear
+      @lock.synchronize do
+        @buckets = {}
+        @users = {}
+      end
+    end
 
     # What was counted, as the protocol's body, and a fresh start; nil when nothing was.
     def take(options)
       buckets = @lock.synchronize do
         taken = @buckets
         @buckets = {}
+        @users = {}
         taken
       end
       return nil if buckets.empty?

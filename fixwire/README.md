@@ -130,7 +130,7 @@ A negative score opens a `user_feedback` issue for the agent run.
 | `service_name` | `OTEL_SERVICE_NAME`, else `shop` of `shop@1.4.0` | |
 | `sample_rate` | 1 | Share of errors sent |
 | `traces_sample_rate` | 0 | Share of new traces kept |
-| `trace_propagation_targets` | none | URLs that receive trace headers |
+| `trace_propagation_targets` | none | Where outgoing requests carry trace headers (below) |
 | `before_send`, `before_breadcrumb` | | Change or drop events and breadcrumbs |
 | `send_default_pii` | off | Send the user's IP address and identifying headers |
 | `redact`, `sensitive_keys` | on, the server's keys | On-device masking |
@@ -141,11 +141,26 @@ A negative score opens a `user_feedback` issue for the agent run.
 | `project_root` | Bundler's root | Files are named relative to it |
 | `in_app_include`, `in_app_exclude` | | Module prefixes that are, or are not, your code |
 | `context_lines` | 5 | Source lines around each of your frames |
-| `max_breadcrumbs`, `max_queue` | 100, 1000 | |
+| `max_value_length` | 1024 | Bytes of UTF-8 a string keeps; a longer one is cut and ends in `...` |
+| `max_stack_frames` | 100 | Frames kept per exception, the newest |
+| `max_breadcrumbs` | 100 | |
+| `max_queue` | 100 | Events, traces and requests waiting to be sent; as many wait for a retry |
 | `timeout`, `shutdown_timeout` | 5 s, 2 s | Of a request to Fixwire; of the exit's sending |
 | `debug` | `FIXWIRE_DEBUG` | Log what the SDK does and drops to stderr |
 
 An option that doesn't exist is an error, so a typo doesn't go unnoticed.
+
+`trace_propagation_targets` compares a URL without its user info, query
+and fragment. A string with `://` matches the URLs it starts
+(`"https://api.example.com/v2"`); any other string is a host, with a port if
+it has one, and matches that host and its subdomains (`"example.com"` matches
+`api.example.com`, not `badexample.com` or `example.com.evil.net`); a
+`Regexp` is searched in the URL. A string starting with `/` matches only
+relative URLs, which Ruby's HTTP clients don't send.
+
+Strings are masked before they are cut, over the part kept and the next
+16 kB, so a secret the cut goes through is still found. Values are walked at
+most 10 levels deep and 100 items wide (10,000 objects each).
 
 ## Examples
 

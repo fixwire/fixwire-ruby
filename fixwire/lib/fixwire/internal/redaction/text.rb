@@ -46,6 +46,24 @@ module Fixwire
           utf8(string).tr("\u0130", "i").downcase.delete("-_ ")
         end
 
+        # The start of valid UTF-8 text in at most limit bytes, cut on a
+        # character boundary.
+        def self.head(string, limit)
+          return string if string.bytesize <= limit
+
+          i = [limit, 0].max
+          i -= 1 while i.positive? && string.getbyte(i).between?(0x80, 0xBF) # inside a character
+          string.byteslice(0, i)
+        end
+
+        # Valid UTF-8 text in at most limit bytes: when it is longer (or was
+        # cut already), it ends in "...", within the limit.
+        def self.cut(string, limit, cut: false)
+          return string if string.bytesize <= limit && !cut
+
+          "#{head(string, limit - 3)}..."
+        end
+
         def initialize(string)
           @string = string
         end

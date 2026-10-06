@@ -29,32 +29,57 @@ module Fixwire
     # Whether an exception was captured already, so that a log record of it is not sent twice.
     def captured?(exception) = @captured.key?(exception)
 
-    # Whether trace headers may go to a URL: it holds one of the trace propagation targets.
+    # Whether trace headers may go to a URL, by the trace propagation targets. The URL is compared
+    # without its user info, query and fragment: a target with "://" matches the URLs it starts;
+    # one starting with "/", relative URLs whose path it starts (clients here see absolute ones);
+    # any other is a host, with a port if it has one, matching that host and its subdomains
+    # ("example.com": api.example.com, not badexample.com); a Regexp is searched in the URL.
     def propagate_to?(url)
-      options.trace_propagation_targets.any? { |t| !t.to_s.empty? && url.to_s.include?(t.to_s) }
+      targets = Array(options.trace_propagation_targets)
+      return false if targets.empty?
+
+      uri = URI.parse(url.to_s)
+      compared = url.to_s.sub(/[?#].*\z/m, "")
+      compared = compared.sub("#{uri.userinfo}@", "") if uri.userinfo
+      host = uri.host&.downcase
+      targets.any? do |target|
+        case target
+        when Regexp then target.match?(compared)
+        when String
+          if target.include?("://") then compared.start_with?(target)
+          elsif target.start_with?("/") then host.nil? && compared.start_with?(target)
+          else host && host_target?(target.downcase, host, uri.port)
+          end
+        end
+      end
+    rescue StandardError
+      false
     end
 
     # @api private queues an event with what the scope knows: its id, or nil when not sent
     def capture(event, scope, span)
       return nil unless enabled?
 
-      prepare(event, scope, span)
+      Fixwire.busy { prepare(event, scope, span) }
     rescue StandardError => e
       log("capturing an event failed: #{e.message}")
       nil
     end
 
-    # @api private finished spans, sent with the next batch
+    # @api private a segment's finished spans, sent with the next batch
     def queue_spans(spans)
-      spans.each do |span|
-        @worker.push([:span, Otlp.span(span.record, redactor)])
+      records = spans.filter_map do |span|
+        Otlp.span(span.record, redactor, options.max_value_length)
       rescue StandardError => e
         log("recording a span failed: #{e.message}")
+        nil
       end
+      @worker.push([:spans, records]) if records.any?
     end
 
     # Reports a run of a scheduled job: in progress when it starts, then ok or error with the
-    # returned id. Its id, or nil when it was not sent.
+    # returned id. Its id, or nil when it was not sent. The monitor and its config are the app's
+    # own names: cut to max_value_length, not masked.
     def capture_check_in(monitor, status, id: nil, duration: nil, config: nil)
       return nil unless enabled? && !monitor.to_s.strip.empty?
 
@@ -62,7 +87,9 @@ module Fixwire
       body = { "sdk" => Fixwire.sdk, "check_in_id" => id, "status" => status.to_s, "environment" => options.environment }
       body["duration"] = duration if duration.to_f.positive?
       body["monitor_config"] = config.to_wire if config
-      @worker.push([:request, "/v1/check-ins/#{URI.encode_uri_component(monitor.to_s)}", "check_in", body]) ? id : nil
+      body = Otlp.cut(Otlp.plain(body), options.max_value_length)
+      monitor = Otlp.cut(Otlp.utf8(monitor.to_s), options.max_value_length)
+      @worker.push([:request, "/v1/check-ins/#{URI.encode_uri_component(monitor)}", "check_in", body]) ? id : nil
     rescue StandardError => e
       log("sending a check-in failed: #{e.message}")
       nil
@@ -77,13 +104,13 @@ module Fixwire
 
       user = scope.user
       body = { "message" => message, "name" => feedback[:name] || user&.username, "email" => feedback[:email] || user&.email,
-               "url" => feedback[:url] }.reject { |_, v| v.nil? || v == "" }
+               "url" => feedback[:url], "source" => feedback[:source] || "api", "trace_id" => feedback[:trace_id] || span&.trace_id,
+               "event_id" => feedback[:event_id] }.reject { |_, v| v.nil? || v == "" }
       body["score"] = score unless score.zero?
-      body = Otlp.scrub(body, redactor)
+      body = Otlp.clean(body, redactor, options.max_value_length)
       id = Ids.generate(16)
-      body.merge!({ "sdk" => Fixwire.sdk, "feedback_id" => id, "timestamp" => Time.now.to_f, "source" => feedback[:source] || "api",
-                    "environment" => options.environment, "trace_id" => feedback[:trace_id] || span&.trace_id,
-                    "event_id" => feedback[:event_id], "release" => options.release }.compact)
+      body.merge!(Otlp.cut({ "sdk" => Fixwire.sdk, "feedback_id" => id, "timestamp" => Time.now.to_f,
+                             "environment" => options.environment, "release" => options.release }.compact, options.max_value_length))
       @worker.push([:request, "/v1/feedback", "feedback", body]) ? id : nil
     rescue StandardError => e
       log("capturing feedback failed: #{e.message}")
@@ -132,7 +159,19 @@ module Fixwire
       event = before_send(event)
       return nil if event.nil?
 
-      @worker.push([:log, Otlp.event_record(event, redactor)]) ? event.event_id : nil
+      @worker.push([:log, Otlp.event_record(event, redactor, options.max_value_length)]) ? event.event_id : nil
+    end
+
+    # Whether a host matches a target host, with the target's port if it has one.
+    def host_target?(target, host, port)
+      name, colon, wanted = target.rpartition(":")
+      if colon.empty? || !wanted.match?(/\A[0-9]+\z/) # "[::1]" holds colons, not a port
+        name = target
+        wanted = nil
+      end
+      return false if name.empty? || (wanted && wanted.to_i != port)
+
+      host == name || host.end_with?(".#{name}")
     end
 
     def personal_data(event)

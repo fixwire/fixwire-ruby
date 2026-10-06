@@ -98,6 +98,9 @@ module Fixwire
       return nil unless enabled?
 
       remember(client.capture(Event.new(message: message.to_s, level: Fixwire.level(level)), scope, span))
+    rescue StandardError => e
+      client&.log("reading a message failed: #{e.message}") # its to_s, say
+      nil
     end
 
     def capture_event(event)
@@ -106,21 +109,31 @@ module Fixwire
       remember(client.capture(event, scope, span))
     end
 
+    # Records a breadcrumb on the scope, after before_breadcrumb; what that callback logs is not
+    # one more.
     def add_breadcrumb(breadcrumb)
-      max = 100
-      options = client&.options
-      if options
-        max = options.max_breadcrumbs
-        if options.before_breadcrumb
-          breadcrumb = begin
-            options.before_breadcrumb.call(breadcrumb)
-          rescue StandardError
-            breadcrumb
+      Fixwire.busy do
+        max = 100
+        options = client&.options
+        if options
+          max = options.max_breadcrumbs
+          if options.before_breadcrumb
+            breadcrumb = begin
+              options.before_breadcrumb.call(breadcrumb)
+            rescue StandardError => e
+              client.log("before_breadcrumb failed, keeping the breadcrumb as it is: #{e.message}")
+              breadcrumb
+            end
+            return if breadcrumb.nil?
           end
-          return if breadcrumb.nil?
         end
+        return client&.log("dropped a #{breadcrumb.class}: not a breadcrumb") unless breadcrumb.is_a?(Breadcrumb)
+
+        scope.add_breadcrumb(breadcrumb, max)
       end
-      scope.add_breadcrumb(breadcrumb, max)
+    rescue StandardError => e
+      client&.log("adding a breadcrumb failed: #{e.message}")
+      nil
     end
 
     # Starts a span under the current one (or a new trace) and makes it current until it finishes.

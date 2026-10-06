@@ -19,8 +19,10 @@ module Fixwire
 
         attr_reader :count
 
-        def initialize(redactor)
+        # limit: each string and key is cut as Redactor#mask cuts it (nil: not).
+        def initialize(redactor, limit = nil)
           @redactor = redactor
+          @limit = limit
           @count = 0
         end
 
@@ -37,14 +39,14 @@ module Fixwire
         private
 
         def walk_string(value)
-          masked, findings = @redactor.mask(value)
+          masked, findings = @redactor.mask(value, limit: @limit)
           @count += findings.size
           masked
         end
 
         def walk_symbol(value)
           name = value.name
-          masked, findings = @redactor.mask(name)
+          masked, findings = @redactor.mask(name, limit: @limit)
           return value if findings.empty? && masked == name
 
           @count += findings.size
@@ -56,7 +58,7 @@ module Fixwire
           key = text(list[0]) if list.size == 2
           if key && !blank?(list[1]) && @redactor.sensitive?(key)
             @count += 1
-            return [list[0], FILTERED]
+            return [@limit ? Text.cut(Text.utf8(key), @limit) : list[0], FILTERED]
           end
           list.map { |item| value(item, depth + 1) }
         end
@@ -68,8 +70,8 @@ module Fixwire
           map.each do |key, val|
             name = key_text(key)
             out_key = key.is_a?(String) ? name : key
-            masked, findings = @redactor.mask(name)
-            renamed << [name, out_key, masked, findings.size] unless findings.empty?
+            masked, findings = @redactor.mask(name, limit: @limit)
+            renamed << [name, out_key, masked, findings.size] unless findings.empty? && masked == name
             names << name
             out[out_key] = !blank?(val) && @redactor.sensitive?(name) ? filter(val) : value(val, depth + 1)
           end

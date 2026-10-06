@@ -37,11 +37,12 @@ module Fixwire
     def route = request.route
 
     def route=(route)
-      return if route.nil? || route.to_s.empty?
+      route = Span.text(route)
+      return if route.empty?
 
-      request.route = route.to_s
+      request.route = route
       span.name = "#{request.http_method} #{route}"
-      span.set_attribute("http.route", route.to_s)
+      span.set_attribute("http.route", route)
     end
 
     # Ends the request with its status code; a 5xx fails the span. Later calls do nothing.

@@ -5,9 +5,11 @@ module Fixwire
   LEVELS = { debug: 5, info: 9, warning: 13, error: 17, fatal: 21 }.freeze
 
   def self.level(value)
-    level = value&.to_sym
+    level = value.respond_to?(:to_sym) ? value.to_sym : nil
     level = :warning if level == :warn
     LEVELS.key?(level) ? level : nil
+  rescue StandardError
+    nil
   end
 
   # The user an event or a session belongs to. ip_address is sent only with send_default_pii.

@@ -13,7 +13,7 @@ module Fixwire
 
     # The kind an operation implies.
     def self.of(op)
-      case op.to_s
+      case Span.text(op)
       when "http.server", /\.server\z/ then SERVER
       when "http.client", /\Adb/, /\.client\z/ then CLIENT
       when /\.publish\z/ then PRODUCER
@@ -27,9 +27,12 @@ module Fixwire
   # with the spans finished under it when it finishes.
   class Span
     MAX_CHILDREN = 1000
-    # W3C's limits for a caller's tracestate and baggage: longer ones are not passed on.
+    MAX_ATTRIBUTES = 128
+    # W3C's limits for a caller's tracestate and baggage: longer ones, or ones holding a control
+    # character, are not passed on.
     MAX_TRACESTATE = 512
     MAX_BAGGAGE = 8192
+    CONTROL = /[\x00-\x08\x0A-\x1F\x7F]/
 
     attr_reader :trace_id, :span_id, :parent_span_id, :sampled, :tracestate, :baggage, :kind, :op, :start_time,
                 :end_time, :attributes
@@ -49,9 +52,10 @@ module Fixwire
 
     def initialize(hub, name, op, attributes, kind, parent, traceparent, tracestate, baggage, start_time)
       @hub = hub
-      @name = name.to_s
+      @name = Span.text(name)
       @op = op
-      @attributes = attributes.to_h.transform_keys(&:to_s)
+      @attributes = {}
+      attributes.each { |key, value| set_attribute(key, value) } if attributes.is_a?(Hash)
       @span_id = Ids.generate(8)
       @start_time = start_time || Time.now.to_f
       @children = []
@@ -61,8 +65,8 @@ module Fixwire
       if continued
         @trace_id, @parent_span_id, @sampled = continued
         @remote_parent = true
-        @tracestate = tracestate if tracestate.to_s.bytesize <= MAX_TRACESTATE
-        @baggage = baggage if baggage.to_s.bytesize <= MAX_BAGGAGE
+        @tracestate = Span.passable(tracestate, MAX_TRACESTATE)
+        @baggage = Span.passable(baggage, MAX_BAGGAGE)
         @segment = self
       elsif parent
         @trace_id = parent.trace_id
@@ -84,16 +88,25 @@ module Fixwire
 
     def segment_name = segment.name
 
+    # Sets an attribute; past MAX_ATTRIBUTES, new ones are left out.
     def set_attribute(key, value)
-      @attributes[key.to_s] = value
+      key = Span.text(key)
+      @attributes[key] = value if @attributes.size < MAX_ATTRIBUTES || @attributes.key?(key)
       self
     end
 
     # Marks the span failed, with the exception or a message.
     def set_error(error = nil)
       @failed = true
-      @status_message = error.is_a?(Exception) ? error.message : error&.to_s
+      @status_message = error.is_a?(Exception) ? Span.text(Frames.safe_message(error)) : error && Span.text(error)
       self
+    end
+
+    # @api private an app's object as text, "" when its to_s fails
+    def self.text(value)
+      value.to_s
+    rescue StandardError
+      ""
     end
 
     def failed? = @failed
@@ -167,15 +180,25 @@ module Fixwire
       tail.to_i(16) / (2**56).to_f >= 1 - rate
     end
 
-    # [trace_id, parent_span_id, sampled] from a W3C traceparent, or nil when it is malformed.
+    # [trace_id, parent_span_id, sampled] from a W3C traceparent, or nil unless it is well formed:
+    # version 00, a non-zero trace id of 32 hex digits, a non-zero span id of 16, 2 for the flags.
     def self.parse_traceparent(header)
-      parts = header.to_s.strip.split("-")
-      return nil if parts.size < 4 || parts[0].size != 2 || parts[0].casecmp?("ff")
-      return nil unless parts[1].size == 32 && parts[2].size == 16 && parts[3].size == 2
-      return nil unless parts[0..3].join.match?(/\A\h+\z/)
+      return nil unless header.is_a?(String)
+
+      parts = header.strip.split("-", -1)
+      return nil unless parts.size == 4 && parts[0] == "00" && parts[1].size == 32 && parts[2].size == 16 && parts[3].size == 2
+      return nil unless parts.join.match?(/\A\h+\z/)
       return nil if parts[1].delete("0").empty? || parts[2].delete("0").empty?
 
       [parts[1].downcase, parts[2].downcase, parts[3].to_i(16).odd?]
+    end
+
+    # A caller's tracestate or baggage as it may be passed on: nil when it is longer than limit
+    # bytes or holds a control character.
+    def self.passable(header, limit)
+      return nil unless header.is_a?(String) && header.bytesize <= limit && !header.b.match?(CONTROL)
+
+      header
     end
   end
 

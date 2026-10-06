@@ -49,6 +49,8 @@ module Fixwire
         return route.to_s.sub("(.:format)", "") if route
 
         env["sinatra.route"]&.split(" ", 2)&.last
+      rescue StandardError
+        nil
       end
 
       private

@@ -146,4 +146,18 @@ class IntegrationsTest < Minitest::Test
 
     assert_equal(["cart loaded"], attrs(@ingest.log_records.first)["fixwire.breadcrumbs"].map { |c| c["message"] })
   end
+
+  def test_skips_what_is_logged_while_capturing
+    log = Logger.new(StringIO.new)
+    @ingest.init(breadcrumbs_logger: true, before_breadcrumb: ->(crumb) { log.info("from before_breadcrumb") && crumb },
+                 before_send: ->(event) { log.info("from before_send") && event })
+    Fixwire.add_breadcrumb(category: "cart", message: "checkout")
+    Fixwire.capture_message("x")
+    Fixwire.capture_message("y")
+    Fixwire.flush
+
+    assert_equal([["checkout"], ["checkout"]], @ingest.log_records.map do |r|
+      attrs(r)["fixwire.breadcrumbs"].map { |c| c["message"] }
+    end)
+  end
 end

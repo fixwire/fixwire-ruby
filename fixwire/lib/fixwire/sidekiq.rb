@@ -60,7 +60,9 @@ module Fixwire
       def retries?(job)
         retry_count = job["retry_count"]
         allowed = job["retry"] == true ? 25 : job["retry"].to_i
-        allowed.positive? && (retry_count.nil? || retry_count + 1 < allowed)
+        allowed.positive? && (retry_count.nil? || retry_count.to_i + 1 < allowed)
+      rescue StandardError # a payload's own idea of retries
+        false
       end
     end
 

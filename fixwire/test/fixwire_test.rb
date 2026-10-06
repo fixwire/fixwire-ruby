@@ -326,6 +326,28 @@ class FixwireTest < Minitest::Test
     assert_equal "done", Fixwire.with_monitor("nightly") { "done" }
   end
 
+  def test_hostile_app_objects_never_raise
+    @ingest.init(traces_sample_rate: 1.0, before_breadcrumb: ->(_crumb) { "not a breadcrumb" })
+    hostile = Object.new
+    def hostile.to_s = raise("no to_s")
+
+    assert_nil Fixwire.capture_message(hostile)
+    assert_nil Fixwire.add_breadcrumb(nonsense: 1)
+    assert_nil Fixwire.add_breadcrumb(message: "dropped by before_breadcrumb")
+    Fixwire.set_tag(hostile, hostile)
+    Fixwire.set_user({ 1 => 2 })
+    Fixwire.set_extra("odd", hostile)
+    span = Fixwire.start_span(hostile, op: hostile, attributes: { hostile => 1 })
+    span.set_attribute(hostile, hostile).set_error(hostile)
+    span.finish
+
+    refute_nil Fixwire.capture_message("still fine", level: hostile)
+    Fixwire.flush
+
+    assert_equal "[Unreadable]", attrs(@ingest.log_records.last)["odd"]
+    assert_equal 1, @ingest.spans.size
+  end
+
   def test_threads_keep_their_own_scope
     @ingest.init
     Fixwire.set_tag("app", "shop")

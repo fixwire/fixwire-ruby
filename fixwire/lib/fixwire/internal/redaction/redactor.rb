@@ -16,6 +16,11 @@ module Fixwire
       # byte as U+FFFD (see Text.utf8). What comes out is valid UTF-8.
       class Redactor
         FILTERED = Redaction::FILTERED
+        # The finding of text a detector failed on.
+        FAILED = "failed"
+        # How far past a cut text is still searched: a JWT or a PEM key the
+        # cut goes through is found whole.
+        LOOKAHEAD = 16_384
 
         # The detectors on by default, in the server's order: all but ipv4 (in
         # error messages IP addresses are usually servers worth seeing).
@@ -56,20 +61,31 @@ module Fixwire
         # Masks the findings in a string: each becomes "[REDACTED:<detector>]",
         # as the server writes it. Returns the masked text and each finding's
         # detector, leftmost first.
-        def mask(string)
-          text = Text.new(Text.utf8(string))
+        #
+        # With a limit, the text is cut to at most limit bytes after masking
+        # (see Text.cut), and only the part kept and the LOOKAHEAD bytes after
+        # it are searched: a secret the cut goes through is still found. Text
+        # a detector fails on (a pattern's timeout) is FILTERED whole, never
+        # sent as it is.
+        def mask(string, limit: nil)
+          string = Text.utf8(string)
+          window = limit ? Text.head(string, limit + LOOKAHEAD) : string
+          text = Text.new(window)
           found = find(text)
-          return [text.string, []] if found.empty?
-
-          [replace(text.string, found), found.map(&:last)]
+          masked = found.empty? ? window : replace(window, found)
+          masked = Text.cut(masked, limit, cut: window.bytesize < string.bytesize) if limit
+          [masked, found.map(&:last)]
+        rescue StandardError
+          [FILTERED, [FAILED]]
         end
 
         # Masks every string in a JSON-like value (Hash, Array, String, Symbol,
         # numbers, true, false, nil) and filters the values of sensitive keys,
         # by the server's rules. Returns a new value, which shares what did not
-        # change with the input, and the number of values masked.
-        def walk(value)
-          walker = Walker.new(self)
+        # change with the input, and the number of values masked. With a limit,
+        # every string and key is cut as #mask cuts it.
+        def walk(value, limit: nil)
+          walker = Walker.new(self, limit)
           [walker.value(value), walker.count]
         end
 
@@ -85,9 +101,7 @@ module Fixwire
         private
 
         # The non-overlapping findings, as [start, end, detector] sorted by
-        # start; when two overlap, the earlier detector wins. A pattern that
-        # times out (a Regexp.timeout set by the application) masks the whole
-        # text, so a failure never lets a value through.
+        # start; when two overlap, the earlier detector wins.
         def find(text)
           found = []
           @detectors.each do |detector|
@@ -95,8 +109,6 @@ module Fixwire
 
             added = accept(detector, detector.spans(text), found, text)
             found = (found + added).sort_by!(&:first) unless added.empty?
-          rescue Regexp::TimeoutError
-            return [[0, text.string.bytesize, detector.name]]
           end
           found
         end

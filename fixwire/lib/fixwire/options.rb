@@ -14,10 +14,12 @@ module Fixwire
       service_name: nil,              # OTEL_SERVICE_NAME, else "shop" of a shop@1.4.0 release
       sample_rate: 1.0,               # the share of errors and messages sent
       traces_sample_rate: 0.0,        # the share of new traces kept (continued ones follow the caller)
-      trace_propagation_targets: [],  # URLs outgoing requests carry trace headers to (those holding one)
+      trace_propagation_targets: [],  # where outgoing requests carry trace headers: URL prefixes, hosts, regexps
       before_send: nil,               # ->(event) { event or nil }: change an event, or drop it
       before_breadcrumb: nil,         # ->(breadcrumb) { breadcrumb or nil }
       max_breadcrumbs: 100,
+      max_value_length: 1024,         # bytes of UTF-8 a string sent keeps (cut ones end in "...")
+      max_stack_frames: 100,          # frames kept per exception, the newest
       send_default_pii: false,        # the user's IP address and identifying request headers
       redact: true,                   # mask secrets and personal data on the device, as the server does
       sensitive_keys: nil,            # key fragments whose values are filtered whole; nil for the server's
@@ -30,7 +32,7 @@ module Fixwire
       capture_uncaught: true,         # report the exception that ends the process
       breadcrumbs_logger: true,       # ::Logger records from INFO become breadcrumbs
       trace_net_http: true,           # Net::HTTP requests are client spans and breadcrumbs
-      max_queue: 1000,                # events and spans waiting to be sent
+      max_queue: 100,                 # what waits to be sent (events, traces, requests), and as many retries
       shutdown_timeout: 2.0,          # how long the exit waits to send what is left
       timeout: 5.0,                   # of a request to Fixwire
       debug: false,                   # log what the SDK does, and what it drops, to stderr (FIXWIRE_DEBUG=1)
@@ -64,6 +66,9 @@ module Fixwire
       self.debug ||= %w[1 true yes on].include?(ENV.fetch("FIXWIRE_DEBUG", "").strip.downcase)
       self.sample_rate = 1.0 unless sample_rate.to_f.positive? && sample_rate.to_f <= 1
       self.traces_sample_rate = traces_sample_rate.to_f.clamp(0.0, 1.0)
+      self.max_value_length = whole(max_value_length, 4, 1024) # room for "..."
+      self.max_stack_frames = whole(max_stack_frames, 1, 100)
+      self.max_queue = whole(max_queue, 1, 100)
       self.project_root = File.expand_path(project_root || default_root).chomp("/")
       self
     end
@@ -83,6 +88,11 @@ module Fixwire
 
       found = ENV.fetch(name, nil)
       blank?(found) ? nil : found
+    end
+
+    # A whole number of at least min, else the default.
+    def whole(value, min, default)
+      value.is_a?(Integer) && value >= min ? value : default
     end
 
     def default_root

@@ -38,11 +38,14 @@ module Fixwire
           assert_mask "pa#{LONG_S * 2}word=[REDACTED:secret_assignment] pwd", ["secret_assignment"],
                       "pa#{LONG_S * 2}word=abcdefgh pwd"
           assert_mask "ba#{LONG_S}ic [REDACTED:http_auth] basic", ["http_auth"], "ba#{LONG_S}ic dXNlcjpwYXNz basic"
-          # The long s is no ASCII word character: the word boundary before it
-          # needs a word character on the left.
+          # A secret's name may end a longer one, so nothing before it counts.
           assert_mask "x#{LONG_S}ecret=[REDACTED:secret_assignment] token", ["secret_assignment"],
                       "x#{LONG_S}ecret=abcdefgh token"
-          assert_mask "#{LONG_S}ecret=abcdefgh token", [], "#{LONG_S}ecret=abcdefgh token"
+          assert_mask "#{LONG_S}e#{LONG_S * 2}id=[REDACTED:secret_assignment] token", ["secret_assignment"],
+                      "#{LONG_S}e#{LONG_S * 2}id=abcdefgh token"
+          # An OAuth code only in a query or fragment.
+          assert_mask "?CODE=[REDACTED:secret_assignment]", ["secret_assignment"], "?CODE=abcdefgh"
+          assert_mask "xcode=abcdefgh ?code", [], "xcode=abcdefgh ?code"
           # U+0130 lower-cases to "i" but folds to nothing.
           assert_mask "BAS#{DOTTED_I}C abcdefghijkl1", [], "BAS#{DOTTED_I}C abcdefghijkl1"
         end
@@ -116,6 +119,44 @@ module Fixwire
             assert_operator ms, :<, 500, "input #{i}"
             refute_match(/\A\[REDACTED:[a-z_]+\]\z/, masked, "input #{i}")
           end
+        end
+
+        # A name may end a longer one, so every start is a candidate: eight
+        # times the text takes about eight times as long (a pattern that
+        # backtracks would take sixty-four).
+        def test_secret_assignments_take_linear_time
+          shapes = [->(n) { "token#{" " * n}" }, ->(n) { "token=#{" " * n}x" }, ->(n) { "sessid" * (n / 6) },
+                    ->(n) { "?code" * (n / 5) }, ->(n) { "&code= ab" * (n / 9) }, ->(n) { "token=ab," * (n / 9) },
+                    ->(n) { "secret_key_" * (n / 11) }, ->(n) { "#{"x" * n}token" }]
+          shapes.each_with_index do |shape, i|
+            small = fastest { Redactor.default.mask(shape.call(50_000)) }
+            large = fastest { Redactor.default.mask(shape.call(400_000)) }
+
+            assert_operator large, :<, (small * 8 * 3) + 0.05, "shape #{i}"
+          end
+        end
+
+        def test_a_cut_text_is_masked_before_the_cut
+          pem = "-----BEGIN RSA PRIVATE KEY-----\n#{"MIIE" * 1000}\n-----END RSA PRIVATE KEY-----"
+          masked, findings = Redactor.default.mask("#{"a" * 1000} #{pem}", limit: 1024)
+
+          assert_equal "#{"a" * 1000} [REDACTED:private_key]", masked, "the key the cut goes through"
+          assert_equal ["private_key"], findings
+          masked, = Redactor.default.mask("é" * 600, limit: 1024)
+
+          assert_equal "#{"é" * 510}...", masked, "on a character boundary, the dots within the limit"
+          assert_equal "é" * 512, Redactor.default.mask("é" * 512, limit: 1024).first
+          assert_equal "#{"x" * 1021}...", Redactor.default.mask("x" * 1025, limit: 1024).first
+          assert_equal "#{"x" * 1021}...", Redactor.default.mask("#{"x" * 1024}#{pem}", limit: 1024).first
+        end
+
+        def test_text_a_detector_fails_on_is_filtered
+          failing = Detector.new(name: "failing", scan: ->(_) { raise Regexp::TimeoutError, "too slow" })
+          redactor = Redactor.send(:new, [failing], [])
+
+          assert_equal ["[Filtered]", ["failed"]], redactor.mask("ada@example.com")
+          assert_equal [{ "[Filtered]" => 1, "[Filtered] (2)" => "[Filtered]" }, 3],
+                       redactor.walk({ "note" => "ada@example.com", "count" => 1 })
         end
 
         def test_many_findings_in_one_text
@@ -283,8 +324,17 @@ module Fixwire
             "#{"a." * 50_000}#{"@" * 1000}", "a@" * 50_000, "xoxb-#{"a" * 300}" * 300, "ghp_" * 25_000,
             "ghp_#{"a" * 100_000}", "pwd: abc " * 11_000, "password#{" " * 100_000}", "Bearer " * 14_000,
             "AB12 " * 20_000, "+1 2 3 " * 14_000, "eyJaaaaaaaaaa." * 7000, "-eyJ" * 25_000,
-            "-eyJaaaaaaaa.eyJ#{"-eyJ" * 25_000}"
+            "-eyJaaaaaaaa.eyJ#{"-eyJ" * 25_000}", "token#{" " * 100_000}", "token=#{" " * 100_000}x",
+            "sessid" * 17_000, "?code" * 20_000, "&code= ab" * 11_000, "credentials:" * 8000
           ]
+        end
+
+        def fastest
+          Array.new(3) do
+            started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            yield
+            Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+          end.min
         end
       end
     end

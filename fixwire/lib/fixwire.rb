@@ -58,8 +58,10 @@ module Fixwire
 
     # Records something that happened: a Breadcrumb, or its fields as keywords.
     def add_breadcrumb(breadcrumb = nil, **fields)
-      breadcrumb ||= Breadcrumb.new(**fields, level: Fixwire.level(fields[:level]))
-      Hub.current.add_breadcrumb(breadcrumb)
+      guard("adding a breadcrumb") do
+        breadcrumb ||= Breadcrumb.new(**fields, level: Fixwire.level(fields[:level]))
+        Hub.current.add_breadcrumb(breadcrumb)
+      end
     end
 
     def configure_scope = yield(Hub.current.scope)
@@ -68,10 +70,10 @@ module Fixwire
     def with_scope(&) = Hub.current.with_scope(&)
 
     # A User, a Hash (id:, email:, username:) or an id.
-    def set_user(user) = Hub.current.scope.set_user(user)
-    def set_tag(key, value) = Hub.current.scope.set_tag(key, value)
-    def set_context(name, values) = Hub.current.scope.set_context(name, values)
-    def set_extra(key, value) = Hub.current.scope.set_extra(key, value)
+    def set_user(user) = guard("setting the user") { Hub.current.scope.set_user(user) }
+    def set_tag(key, value) = guard("setting a tag") { Hub.current.scope.set_tag(key, value) }
+    def set_context(name, values) = guard("setting a context") { Hub.current.scope.set_context(name, values) }
+    def set_extra(key, value) = guard("setting an extra") { Hub.current.scope.set_extra(key, value) }
 
     # Starts a span under the current one (or a new trace), current until it finishes.
     def start_span(name, op: nil, attributes: {}) = Hub.current.start_span(name, op: op, attributes: attributes)
@@ -125,6 +127,29 @@ module Fixwire
 
     # @api private
     def sdk = { "name" => SDK_NAME, "version" => VERSION }
+
+    # @api private runs a block as the SDK's own work on this thread (or fiber): what a logging
+    # integration sees meanwhile (an app's callback logging, say) is not recorded. Only the
+    # outermost call clears the mark.
+    def busy
+      return yield if Thread.current[:__fixwire_busy]
+
+      begin
+        Thread.current[:__fixwire_busy] = true
+        yield
+      ensure
+        Thread.current[:__fixwire_busy] = nil
+      end
+    end
+
+    # @api private runs an entry point's block; what fails there is said in the debug log, not
+    # raised into the app.
+    def guard(what)
+      yield
+    rescue StandardError => e
+      Hub.main&.client&.log("#{what} failed: #{e.message}")
+      nil
+    end
 
     private
 

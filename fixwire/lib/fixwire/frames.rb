@@ -7,7 +7,12 @@ module Fixwire
   # relative to the project, gems and Ruby's own library marked as not the app's.
   module Frames
     MAX_CHAIN = 10
-    MAX_FRAMES = 100
+    # Source lines come from regular files of at most MAX_SOURCE bytes, through a cache of at most
+    # MAX_SOURCES files and MAX_CACHED bytes.
+    MAX_SOURCE = 10 * 1024 * 1024
+    MAX_SOURCES = 64
+    MAX_CACHED = 16 * 1024 * 1024
+    SOURCES_LOCK = Mutex.new
     SDK_DIR = File.expand_path("..", __dir__)
     # "block (2 levels) in Shop::Cart#checkout" (Ruby 3.4) or "block (2 levels) in checkout"
     LABEL = /\A(?<prefix>(?:(?:block(?: \(\d+ levels\))?|rescue|ensure) in )*)(?<owner>[A-Z][\w:]*)(?<sep>[#.])(?<name>[^#.\s]+)\z/
@@ -37,7 +42,8 @@ module Fixwire
         values
       end
 
-      # The exception's frames; one captured without being raised gets the capturer's.
+      # The exception's frames, at most max_stack_frames, the newest kept (a stack overflow's
+      # deepest calls); one captured without being raised gets the capturer's.
       def of(exception, options)
         if exception.backtrace_locations
           from_locations(exception.backtrace_locations, options)
@@ -48,15 +54,16 @@ module Fixwire
         end
       end
 
+      # Backtraces list the newest call first; frames go from the oldest.
       def from_locations(locations, options)
-        frames = locations.first(MAX_FRAMES).map do |l|
+        frames = locations.first(options.max_stack_frames).map do |l|
           frame(l.absolute_path || l.path, l.lineno, l.label, options)
         end
         frames.reverse
       end
 
       def from_lines(lines, options)
-        frames = lines.first(MAX_FRAMES).filter_map do |line|
+        frames = lines.first(options.max_stack_frames).filter_map do |line|
           m = LINE.match(line.to_s)
           frame(m[:path], m[:line].to_i, m[:label], options) if m
         end
@@ -146,14 +153,20 @@ module Fixwire
       end
 
       def source(path)
-        @sources ||= {}
-        return @sources[path] if @sources.key?(path)
+        SOURCES_LOCK.synchronize do
+          @sources ||= {}
+          return @sources[path] if @sources.key?(path)
 
-        @sources.shift if @sources.size >= 64
-        @sources[path] = (File.readlines(path, chomp: true) if File.file?(path) && File.size(path) < 1_000_000)
+          lines = (File.readlines(path, chomp: true) if File.file?(path) && File.size(path) <= MAX_SOURCE)
+          @cached = @cached.to_i + bytes(lines)
+          @cached -= bytes(@sources.shift[1]) while @sources.any? && (@sources.size >= MAX_SOURCES || @cached > MAX_CACHED)
+          @sources[path] = lines
+        end
       rescue StandardError
-        @sources[path] = nil
+        nil
       end
+
+      def bytes(lines) = lines.nil? ? 0 : lines.sum(&:bytesize)
 
       def safe_message(exception)
         exception.message.to_s

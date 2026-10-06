@@ -53,12 +53,23 @@ module Fixwire
           #{START}(?:#{any_case("bearer")}|#{any_case("basic")})(?>#{SPACE}+)
           ((?>[A-Za-z0-9._~+/#{FOLDED}-]{12,})=*)
         }x
-        SECRET_ASSIGNMENT = /
-          #{EDGE}(?:#{%w[password passwd pwd secret token].map { |w| any_case(w) }.join("|")}
-            |#{any_case("api")}[_-]?#{any_case("key")}|#{any_case("access")}[_-]?#{any_case("key")})
+        # A value given to a secret's name, in text, config and URLs. The name
+        # may end a longer one (access_token, client_secret, csrfToken,
+        # PHPSESSID, X-Amz-Signature); an OAuth code counts in a query or
+        # fragment only. At most one way of reading a name can be followed by
+        # the separator, so the name is atomic too, and every quantifier after
+        # it is: each start costs the name and the spaces after it, which no
+        # other start reads again. The timeout is the backstop: text it stops
+        # is sent as [Filtered], never unmasked.
+        SECRET_ASSIGNMENT = Regexp.new(<<~PATTERN, Regexp::EXTENDED, timeout: 1.0)
+          (?>#{any_case("password")}|#{any_case("passwd")}|#{any_case("pwd")}
+            |#{any_case("secret")}(?:[_-]?#{any_case("key")})?|#{any_case("private")}[_-]?#{any_case("key")}
+            |#{any_case("token")}|#{any_case("api")}[_-]?#{any_case("key")}|#{any_case("access")}[_-]?#{any_case("key")}
+            |#{any_case("credential")}#{any_case("s")}?|#{any_case("sess")}(?:#{any_case("ion")})?[_-]?#{any_case("id")}
+            |#{any_case("sig")}(?:#{any_case("nature")})?|[?&\\#]#{any_case("code")})
           (?>["']?)(?>#{SPACE}*)[:=](?>#{SPACE}*)(?>["']?)
-          ([^\t\n\f\r\ "',;&]{6,})
-        /x
+          ((?>[^\\t\\n\\f\\r\\ "',;&]{6,}))
+        PATTERN
         # The boundary is checked after the first letter: a pattern that starts
         # with a class lets Onigmo skip ahead to candidates.
         IBAN = /[A-Z](?<!#{WORD}[A-Z])[A-Z][0-9]{2}(?:\ ?[A-Z0-9]{4}){2,7}(?:\ ?[A-Z0-9]{1,3})?#{FINISH}/x
@@ -91,7 +102,7 @@ module Fixwire
           # Bearer and Basic credentials outside a header (messages, breadcrumbs).
           Detector.new(name: "http_auth", prefilter: %w[bearer basic], pattern: HTTP_AUTH, group: 1,
                        validate: Validators.method(:credential?)),
-          Detector.new(name: "secret_assignment", prefilter: %w[pass secret token api_key apikey api-key pwd],
+          Detector.new(name: "secret_assignment", prefilter: %w[pass pwd secret key token credential sess sig code],
                        pattern: SECRET_ASSIGNMENT, group: 1, validate: Validators.method(:unmasked?)),
           exact("email", ["@"], scan: Scanners.method(:email_spans)),
           Detector.new(name: "credit_card", scan: Scanners.method(:card_spans)),
