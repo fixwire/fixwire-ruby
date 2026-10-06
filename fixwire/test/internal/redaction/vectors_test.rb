@@ -7,28 +7,12 @@ require "fixwire/internal/redaction"
 module Fixwire
   module Internal
     module Redaction
-      # The shared corpus of the Fixwire server's redaction
-      # (pkg/redact/testdata/vectors.json): the same defaults, the same masked
-      # strings and findings, the same masked documents and counts.
+      # The shared corpus of the Fixwire server's redaction (a copy of
+      # pkg/redact/testdata/vectors.json in fixwire/fixwire, kept identical):
+      # the same defaults, the same masked strings and findings, the same
+      # masked documents and counts.
       class VectorsTest < Minitest::Test
-        # The corpus, found by walking up from here, else at FIXWIRE_VECTORS.
-        # The gem's own repository has no corpus: then the tests skip.
-        def self.path
-          dir = __dir__
-          loop do
-            candidate = File.join(dir, "pkg", "redact", "testdata", "vectors.json")
-            return candidate if File.file?(candidate)
-
-            parent = File.dirname(dir)
-            break if parent == dir
-
-            dir = parent
-          end
-          env = ENV.fetch("FIXWIRE_VECTORS", "")
-          env if !env.empty? && File.file?(env)
-        end
-
-        VECTORS_PATH = path
+        VECTORS_PATH = File.join(__dir__, "vectors.json")
 
         def test_defaults_match_the_server
           assert_equal vectors["detectors"], Redactor::DEFAULT_DETECTORS
@@ -58,7 +42,6 @@ module Fixwire
         private
 
         def vectors
-          skip "pkg/redact/testdata/vectors.json not found (set FIXWIRE_VECTORS)" unless VECTORS_PATH
           @vectors ||= JSON.parse(File.read(VECTORS_PATH))
         end
 
