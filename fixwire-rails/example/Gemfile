@@ -1,0 +1,15 @@
+# frozen_string_literal: true
+
+source "https://rubygems.org"
+
+gem "puma", "~> 6.4"
+gem "rails", ">= 7.1"
+gem "sqlite3", ">= 1.4"
+
+# The example installs the SDK from this repository; an app of yours adds `gem "fixwire-rails"`.
+gem "fixwire", path: "../../fixwire"
+gem "fixwire-rails", path: ".."
+
+group :test do
+  gem "minitest", "~> 5.25"
+end

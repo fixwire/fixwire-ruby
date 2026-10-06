@@ -1,0 +1,45 @@
+plugins:
+  - rubocop-minitest
+
+AllCops:
+  TargetRubyVersion: 3.2
+  NewCops: enable
+  SuggestExtensions: false
+  Exclude:
+    - "**/vendor/**/*"
+
+Style/StringLiterals:
+  EnforcedStyle: double_quotes
+Style/StringLiteralsInInterpolation:
+  EnforcedStyle: double_quotes
+Style/Documentation:
+  Enabled: false
+Layout/LineLength:
+  Max: 150
+Naming/AccessorMethodName:
+  Enabled: false # set_user, set_tag, …: the API every Fixwire SDK has
+Naming/MethodParameterName:
+  AllowedNames: [at, id, k, v, op, io, to]
+Metrics/AbcSize:
+  Enabled: false
+Metrics/MethodLength:
+  Enabled: false
+Metrics/ClassLength:
+  Enabled: false
+Metrics/ModuleLength:
+  Enabled: false
+Metrics/CyclomaticComplexity:
+  Enabled: false
+Metrics/PerceivedComplexity:
+  Enabled: false
+Metrics/BlockLength:
+  Enabled: false
+Metrics/ParameterLists:
+  Enabled: false
+Naming/PredicateMethod:
+  Enabled: false
+Minitest/MultipleAssertions:
+  Enabled: false
+Naming/FileName:
+  Exclude:
+    - "lib/fixwire-rails.rb" # the gem's name, for Bundler.require
