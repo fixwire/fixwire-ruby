@@ -54,6 +54,16 @@ class ProcessTest < Minitest::Test
     assert_equal ["from the child", "from the parent"], messages
   end
 
+  # Puma's and Unicorn's workers: a forked child sends at once, with a worker of its own, and
+  # leaves the parent's sessions to the parent.
+  def test_a_forked_child_starts_sending_at_once
+    skip "no fork on this platform" unless Process.respond_to?(:fork)
+
+    status, out = script("forked-worker")
+
+    assert_equal 0, status, out
+  end
+
   private
 
   def script(scenario)

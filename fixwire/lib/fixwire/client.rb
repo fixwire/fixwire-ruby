@@ -98,6 +98,13 @@ module Fixwire
       false
     end
 
+    # @api private in a forked child: a worker of its own at once
+    def forked
+      @worker&.restart
+    rescue StandardError => e
+      log("restarting after a fork failed: #{e.message}")
+    end
+
     def log(message)
       warn("fixwire: #{message}") if options&.debug
     end

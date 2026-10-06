@@ -27,6 +27,9 @@ module Fixwire
   # with the spans finished under it when it finishes.
   class Span
     MAX_CHILDREN = 1000
+    # W3C's limits for a caller's tracestate and baggage: longer ones are not passed on.
+    MAX_TRACESTATE = 512
+    MAX_BAGGAGE = 8192
 
     attr_reader :trace_id, :span_id, :parent_span_id, :sampled, :tracestate, :baggage, :kind, :op, :start_time,
                 :end_time, :attributes
@@ -58,8 +61,8 @@ module Fixwire
       if continued
         @trace_id, @parent_span_id, @sampled = continued
         @remote_parent = true
-        @tracestate = tracestate
-        @baggage = baggage
+        @tracestate = tracestate if tracestate.to_s.bytesize <= MAX_TRACESTATE
+        @baggage = baggage if baggage.to_s.bytesize <= MAX_BAGGAGE
         @segment = self
       elsif parent
         @trace_id = parent.trace_id

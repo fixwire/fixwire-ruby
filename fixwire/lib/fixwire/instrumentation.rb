@@ -39,21 +39,25 @@ module Fixwire
   module LoggerBreadcrumbs
     LEVELS = { "INFO" => :info, "WARN" => :warning, "ERROR" => :error, "FATAL" => :fatal, "ANY" => :error }.freeze
 
+    # A record logged while one is being kept (by before_breadcrumb, say) is left alone, and only
+    # the outer call clears the mark: an inner one clearing it would let the recursion go on.
     def self.record(severity, progname, message)
       level = LEVELS[severity.to_s]
       return if level.nil? || message.is_a?(Exception) || Thread.current[:__fixwire_logging]
 
-      Thread.current[:__fixwire_logging] = true
-      hub = Hub.current
-      return unless hub.enabled? && hub.client.options.breadcrumbs_logger
+      begin
+        Thread.current[:__fixwire_logging] = true
+        hub = Hub.current
+        return unless hub.enabled? && hub.client.options.breadcrumbs_logger
 
-      text = message.is_a?(String) ? message : message.inspect
-      category = progname.is_a?(String) && !progname.empty? ? progname : "log"
-      hub.add_breadcrumb(Breadcrumb.new(category: category, message: text.strip, level: level, type: "log"))
+        text = message.is_a?(String) ? message : message.inspect
+        category = progname.is_a?(String) && !progname.empty? ? progname : "log"
+        hub.add_breadcrumb(Breadcrumb.new(category: category, message: text.strip, level: level, type: "log"))
+      ensure
+        Thread.current[:__fixwire_logging] = nil
+      end
     rescue StandardError
       nil
-    ensure
-      Thread.current[:__fixwire_logging] = nil
     end
 
     private

@@ -22,8 +22,8 @@ module Fixwire
                                             read_timeout: @timeout, write_timeout: @timeout) do |http|
           request = Net::HTTP::Post.new(uri.request_uri, headers)
           request.body = body
-          response = http.request(request)
-          [response.code.to_i, response.each_header.to_h]
+          # The status and headers say all the SDK needs: the body is left unread, however large.
+          http.request(request) { |response| return [response.code.to_i, response.each_header.to_h] }
         end
       rescue StandardError => e # Net::OpenTimeout and the like too
         [0, { "error" => "#{e.class}: #{e.message}" }]
@@ -42,12 +42,41 @@ module Fixwire
     LINGER = 1.0
     SESSIONS_EVERY = 60.0
     RETRIES = [0.5, 2.0].freeze
+    # The protocol's limits, as JSON: an error or a message, a request of log records or spans, and
+    # session aggregates per request (about 110 bytes each, at most 1 MB).
+    MAX_RECORD = 1_000_000
+    MAX_REQUEST = 5_000_000
+    MAX_AGGREGATES = 5000
+    # The longest a rate limit pauses anything, and the kinds of data it may name.
+    MAX_PAUSE = 86_400
+    CATEGORIES = %w[error log span session check_in feedback file].freeze
+
+    # Restarts the main client's worker in a forked child at once (Puma's and Unicorn's workers), so
+    # that a child sends its sessions even when it captures nothing.
+    module ForkHook
+      def _fork
+        pid = super
+        Hub.main&.client&.forked if pid.zero?
+        pid
+      end
+    end
 
     def initialize(client)
       @client = client
       @lock = Mutex.new
       @paused = {}
       start
+      Process.singleton_class.prepend(ForkHook) unless Process.singleton_class < ForkHook
+    end
+
+    # In a forked child: a worker of its own, without the parent's sessions (the parent sends them).
+    def restart
+      @lock.synchronize do
+        if Process.pid != @pid
+          @client.sessions&.clear
+          start
+        end
+      end
     end
 
     # Queues an item: [:log, record], [:span, record] or [:request, path, category, body]. False when
@@ -78,10 +107,6 @@ module Fixwire
       @thread = Thread.new { run }
       @thread.name = "fixwire-worker"
       @thread.report_on_exception = false
-    end
-
-    def restart
-      @lock.synchronize { start if Process.pid != @pid }
     end
 
     def run
@@ -118,15 +143,52 @@ module Fixwire
     end
 
     def send_batches(logs, spans)
-      logs.each_slice(BATCH) { |batch| post("/v1/logs", "error", Otlp.logs(@client.options, batch)) }
-      spans.each_slice(BATCH) { |batch| post("/v1/traces", "span", Otlp.traces(@client.options, batch)) }
+      batches(logs.filter_map { |r| encode(r, MAX_RECORD) }) { |batch| post("/v1/logs", "error", Otlp.logs(@client.options, batch)) }
+      batches(spans.filter_map { |r| encode(r, MAX_REQUEST / 2) }) { |batch| post("/v1/traces", "span", Otlp.traces(@client.options, batch)) }
       logs.clear
       spans.clear
     end
 
+    # Records as JSON in batches of at most BATCH and MAX_REQUEST bytes.
+    def batches(records)
+      batch = []
+      size = 0
+      records.each do |json|
+        if batch.size >= BATCH || (batch.any? && size + json.bytesize > MAX_REQUEST)
+          yield batch
+          batch = []
+          size = 0
+        end
+        batch << json
+        size += json.bytesize + 1
+      end
+      yield batch if batch.any?
+    end
+
+    # A record as JSON, or nil when it can't go: over its limit, an error goes without its
+    # breadcrumbs if that is enough. One that fails or is too large never takes its batch along.
+    def encode(record, limit)
+      json = JSON.generate(record)
+      attributes = record["attributes"]
+      if json.bytesize > limit && attributes&.any? { |a| a["key"] == "fixwire.breadcrumbs" }
+        json = JSON.generate(record.merge("attributes" => attributes.reject { |a| a["key"] == "fixwire.breadcrumbs" }))
+      end
+      return json if json.bytesize <= limit
+
+      @client.log("dropping a record of #{json.bytesize} bytes: the limit is #{limit}")
+      @unsent = true
+      nil
+    rescue StandardError => e
+      @client.log("dropping a record: #{e.message}")
+      @unsent = true
+      nil
+    end
+
     def send_sessions
       body = @client.sessions&.take(@client.options)
-      post("/v1/sessions", "session", body) if body
+      return unless body
+
+      body["aggregates"].each_slice(MAX_AGGREGATES) { |part| post("/v1/sessions", "session", body.merge("aggregates" => part)) }
     end
 
     def post(path, category, body)
@@ -135,7 +197,7 @@ module Fixwire
         @unsent = true
         return false
       end
-      json = gzip(JSON.generate(body))
+      json = gzip(body.is_a?(String) ? body : JSON.generate(body))
       headers = { "Authorization" => "Bearer #{@client.dsn.key}", "Content-Type" => "application/json",
                   "Content-Encoding" => "gzip", "User-Agent" => "#{SDK_NAME}/#{VERSION}" }
       status = 0
@@ -172,7 +234,7 @@ module Fixwire
     end
 
     # Fixwire-Rate-Limits: "60:error;span, 30:" (seconds and categories; none means all). A 429
-    # without it pauses everything for Retry-After, at least a minute.
+    # without it pauses everything for Retry-After, at least a minute. No pause is over a day.
     def limit(header, status, retry_after)
       header = "#{[retry_after.to_i, 60].max}:" if header.nil? && status == 429
       return if header.nil?
@@ -181,8 +243,9 @@ module Fixwire
         seconds, categories = part.strip.split(":", 2)
         next unless seconds.to_i.positive?
 
-        names = categories.to_s.strip.empty? ? [""] : categories.split(";").map(&:strip)
-        @lock.synchronize { names.each { |c| @paused[c] = [@paused[c] || 0, now + seconds.to_i].max } }
+        names = categories.to_s.strip.empty? ? [""] : categories.split(";").map(&:strip) & CATEGORIES
+        until_ = now + [seconds.to_i, MAX_PAUSE].min
+        @lock.synchronize { names.each { |c| @paused[c] = [@paused[c] || 0, until_].max } }
       end
     end
 

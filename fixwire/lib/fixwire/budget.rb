@@ -8,8 +8,11 @@ module Fixwire
   class Budget
     MAX_ISSUES = 1024
     TOP_FRAMES = 5
-    # Parts of a message that change between occurrences.
-    VARIABLE = /\b0x\h+\b|\b\h{8}-\h{4}-\h{4}-\h{4}-\h{12}\b|\b\h{16,}\b|[0-9]+(?:\.[0-9]+)?|\S+@\S+\.\w+/
+    # Parts of a message that change between occurrences. "\S[^\s@]*@" matches where "\S+@" would,
+    # without trying every "@" of a long word again from each start.
+    VARIABLE = /\b0x\h+\b|\b\h{8}-\h{4}-\h{4}-\h{4}-\h{12}\b|\b\h{16,}\b|[0-9]+(?:\.[0-9]+)?|\S[^\s@]*@\S+\.\w+/
+    # How much of a message the fingerprint reads: finding its variable parts is not linear.
+    MAX_MESSAGE = 1024
     FNV_OFFSET = 0xcbf29ce484222325
     FNV_PRIME = 0x100000001b3
     MASK = 0xffffffffffffffff
@@ -61,13 +64,16 @@ module Fixwire
         app = frames.select(&:in_app)
         app = frames if app.empty?
         app.last(TOP_FRAMES).each { |f| parts << "#{f.module}|#{f.function}" }
-        parts << event.exceptions.first.message.to_s.gsub(VARIABLE, "<*>") if frames.empty?
+        parts << normalize(event.exceptions.first.message) if frames.empty?
       else
-        parts << event.message.to_s.gsub(VARIABLE, "<*>")
+        parts << normalize(event.message)
       end
       parts << event.fingerprint.join("\x1f") if event.fingerprint.any?
       fnv1a(parts.join("\x1e"))
     end
+
+    # The message without its variable parts, in UTF-8 (a regexp refuses broken text).
+    def self.normalize(message) = Internal::Redaction::Text.utf8(message.to_s[0, MAX_MESSAGE]).gsub(VARIABLE, "<*>")
 
     def self.fnv1a(text)
       hash = FNV_OFFSET
@@ -105,6 +111,8 @@ module Fixwire
     end
 
     def empty? = @lock.synchronize { @buckets.empty? }
+
+    def clear = @lock.synchronize { @buckets = {} }
 
     # What was counted, as the protocol's body, and a fresh start; nil when nothing was.
     def take(options)

@@ -345,7 +345,8 @@ class FixwireTest < Minitest::Test
     @ingest.init
     Fixwire.configure_scope do |scope|
       scope.request = Fixwire::Request.new(http_method: "GET", url: "https://shop.test/", client_address: "203.0.113.9",
-                                           headers: { "authorization" => "Bearer x", "accept" => "*/*" })
+                                           headers: { "authorization" => "Bearer x", "accept" => "*/*", "forwarded" => "for=203.0.113.9",
+                                                      "cf-connecting-ip" => "203.0.113.9", "true-client-ip" => "203.0.113.9" })
       scope.set_user(id: "u-1", ip_address: "203.0.113.9")
     end
     Fixwire.capture_message("x")
@@ -353,6 +354,7 @@ class FixwireTest < Minitest::Test
     a = attrs(@ingest.log_records.first)
 
     refute a.key?("http.request.header.authorization")
+    assert_empty(a.keys.grep(/forwarded|ip\z/), "proxies' and CDNs' headers with the user's IP")
     refute a.key?("client.address")
     assert_equal "*/*", a["http.request.header.accept"]
     assert_equal "Bearer x", Fixwire.hub.scope.request.headers["authorization"], "the scope's request stays whole"

@@ -28,6 +28,14 @@ when "fork"
     # Windows has no fork: the child is a process of its own, as Windows starts them.
     system(RbConfig.ruby, __FILE__, "child", exception: true)
   end
+when "forked-worker"
+  Fixwire.init(release: "shop@1.0.0", project_root: File.expand_path("../..", __dir__))
+  Fixwire::ServerRequest.start(Fixwire.hub, "GET", "http://shop/", {}).finish(200)
+  pid = fork do
+    worker = Thread.list.any? { |t| t.name == "fixwire-worker" && t.alive? }
+    exit!(worker && Fixwire.client.sessions.empty? ? 0 : 3)
+  end
+  exit(Process.wait2(pid).last.exitstatus)
 when "child" then Fixwire.capture_message("from the child")
 when "message" then Fixwire.capture_message("nightly report sent")
 end

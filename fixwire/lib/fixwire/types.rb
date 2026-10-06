@@ -44,8 +44,10 @@ module Fixwire
     end
   end
 
-  # Headers sent only with send_default_pii: they may identify someone or hold a secret.
-  Request::SENSITIVE_HEADERS = %w[authorization proxy-authorization cookie set-cookie x-forwarded-for x-real-ip x-api-key].freeze
+  # Headers sent only with send_default_pii: they may identify someone or hold a secret (proxies
+  # and CDNs pass the user's IP address in several).
+  Request::SENSITIVE_HEADERS = %w[authorization proxy-authorization cookie set-cookie x-forwarded-for x-real-ip forwarded
+                                  cf-connecting-ip true-client-ip x-client-ip x-api-key].freeze
 
   # One call in a stack trace.
   Frame = Struct.new(:function, :module, :file, :line, :in_app, :context_line, :pre_context, :post_context, keyword_init: true)

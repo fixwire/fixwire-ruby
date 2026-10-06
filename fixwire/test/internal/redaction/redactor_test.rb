@@ -172,6 +172,20 @@ module Fixwire
                       { "b@example.com" => 2, "a@example.com" => 1, "[REDACTED:email]" => 0 })
           # Keys other than strings hold data too.
           assert_walk({ "[REDACTED:credit_card]" => "card as key" }, 1, { 4_111_111_111_111_111 => "card as key" })
+          # Numbering goes past the names other keys hold.
+          assert_walk({ "[REDACTED:email]" => 1, "[REDACTED:email] (3)" => 2, "[REDACTED:email] (2)" => 0 }, 2,
+                      { "a@b.co" => 1, "c@d.co" => 2, "[REDACTED:email] (2)" => 0 })
+        end
+
+        # Request headers are keys an attacker picks: thousands masking alike are numbered in one pass.
+        def test_many_keys_masking_alike_are_numbered_quickly
+          input = (1..6000).to_h { |i| ["user-#{format("%04d", i)}@example.com", i] }
+          started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          out, count = Redactor.default.walk(input)
+
+          assert_operator Process.clock_gettime(Process::CLOCK_MONOTONIC) - started, :<, 2
+          assert_equal 6000, count
+          assert_equal [1, 2, 6000], out.values_at("[REDACTED:email]", "[REDACTED:email] (2)", "[REDACTED:email] (6000)")
         end
 
         def test_typed_attributes_and_pairs

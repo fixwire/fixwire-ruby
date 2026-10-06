@@ -149,7 +149,7 @@ module Fixwire
         hub = Hub.current
         return super unless hub.enabled?
 
-        trace = @__fixwire_trace || {}
+        trace = @__fixwire_trace.is_a?(Hash) ? @__fixwire_trace : {}
         hub.with_scope do |scope|
           scope.set_tag("queue", queue_name).set_transaction(self.class.name)
                .set_context("job", { "class" => self.class.name, "id" => job_id, "executions" => executions })

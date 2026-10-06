@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "json"
+
 module Fixwire
   # @api private builds what the protocol sends: OTLP/HTTP JSON log records (errors and messages)
   # and spans, with Fixwire's attributes. Everything but ids goes through redaction.
@@ -22,12 +24,13 @@ module Fixwire
 
     def scope = { "name" => SDK_NAME, "version" => VERSION }
 
-    def logs(options, records)
-      { "resourceLogs" => [{ "resource" => resource(options), "scopeLogs" => [{ "scope" => scope, "logRecords" => records }] }] }
-    end
+    # The request bodies, around records already in JSON (each was encoded once, to weigh it).
+    def logs(options, records) = request("resourceLogs", "scopeLogs", "logRecords", options, records)
+    def traces(options, spans) = request("resourceSpans", "scopeSpans", "spans", options, spans)
 
-    def traces(options, spans)
-      { "resourceSpans" => [{ "resource" => resource(options), "scopeSpans" => [{ "scope" => scope, "spans" => spans }] }] }
+    def request(resources, scopes, list, options, records)
+      %({"#{resources}":[{"resource":#{JSON.generate(resource(options))},"#{scopes}":[{"scope":#{JSON.generate(scope)},) +
+        %("#{list}":[#{records.join(",")}]}]}]})
     end
 
     def span(record, redactor)
@@ -35,7 +38,9 @@ module Fixwire
       op = attrs.delete("fixwire.op")
       plain = scrub(plain_map(attrs), redactor)
       plain["fixwire.op"] = op
-      record.merge("attributes" => attributes(plain), "name" => mask(record["name"].to_s, redactor))
+      status = record["status"]
+      status = status.merge("message" => mask(status["message"], redactor)) if status["message"]
+      record.merge("attributes" => attributes(plain), "name" => mask(record["name"].to_s, redactor), "status" => status)
     end
 
     def event_record(event, redactor)
@@ -101,15 +106,16 @@ module Fixwire
     end
 
     def mask(text, redactor)
-      return text.to_s if redactor.nil? || text.to_s.empty?
+      return utf8(text.to_s) if redactor.nil? || text.to_s.empty?
 
       redactor.mask(text.to_s).first
     end
 
-    def plain_map(map) = map.to_h { |k, v| [k.to_s, plain(v, 1)] }
+    def plain_map(map) = map.to_h { |k, v| [utf8(k.to_s), plain(v, 1)] }
 
-    # JSON-like values only: strings in UTF-8, symbols and other objects as text.
-    def plain(value, depth)
+    # JSON-like values only: strings in UTF-8, symbols and other objects as text. A container
+    # holding itself (a tree whose nodes know their parent) is cut where it comes round again.
+    def plain(value, depth, seen = nil)
       case value
       when nil, true, false, Integer then value
       when Float then value.finite? ? value : value.to_s
@@ -119,10 +125,18 @@ module Fixwire
       when Hash, Array, Struct
         return "[too deep]" if depth > MAX_DEPTH
 
-        if value.is_a?(Array)
-          value.map { |v| plain(v, depth + 1) }
-        else
-          value.to_h.to_h { |k, v| [k.to_s, plain(v, depth + 1)] }
+        seen ||= {}.compare_by_identity
+        return "[Circular ~]" if seen.key?(value)
+
+        seen[value] = true
+        begin
+          if value.is_a?(Array)
+            value.map { |v| plain(v, depth + 1, seen) }
+          else
+            value.to_h.to_h { |k, v| [utf8(k.to_s), plain(v, depth + 1, seen)] }
+          end
+        ensure
+          seen.delete(value)
         end
       else
         utf8(value.to_s)
@@ -131,10 +145,7 @@ module Fixwire
       value.class.to_s
     end
 
-    def utf8(text)
-      text = text.dup.force_encoding(Encoding::UTF_8) unless text.encoding == Encoding::UTF_8
-      text.valid_encoding? ? text : text.scrub("�")
-    end
+    def utf8(text) = Internal::Redaction::Text.utf8(text)
 
     # OTLP key-values, without empty ones.
     def attributes(map)

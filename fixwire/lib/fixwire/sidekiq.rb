@@ -33,7 +33,7 @@ module Fixwire
         return yield unless hub.enabled?
 
         name = (job["wrapped"] || job["class"]).to_s # an Active Job's own class
-        trace = job["fixwire"] || {}
+        trace = job["fixwire"].is_a?(Hash) ? job["fixwire"] : {} # what a job's payload holds is not ours to trust
         hub.with_scope do |scope|
           scope.set_tag("queue", queue).set_transaction(name)
                .set_context("job", { "class" => name, "jid" => job["jid"], "retry_count" => job["retry_count"] }.compact)

@@ -14,6 +14,8 @@ module Fixwire
       # nested deeper than MAX_DEPTH (the server masks those).
       class Walker
         MAX_DEPTH = 512
+        # A numbered key: "[REDACTED:email] (2)".
+        NUMBERED = /\A(.*) \(([0-9]+)\)\z/m
 
         attr_reader :count
 
@@ -109,23 +111,37 @@ module Fixwire
         end
 
         # Keys that mask alike are numbered in code-point order (the byte order
-        # of UTF-8), each taking the first name no key holds at its turn.
+        # of UTF-8), each taking the first name no key holds at its turn. The
+        # number to try first is kept per masked name, so that thousands of
+        # keys masking alike (request headers) don't each count up from 2; a
+        # name no key holds any more lowers it again.
         def rename(out, names, renamed)
           taken = names.to_h { |name| [name, true] }
+          first = {}
           new_keys = {}
           renamed.each_with_index.sort_by { |(name, *), i| [name, i] }.each do |(name, out_key, masked, findings), _|
-            key = masked
-            n = 2
+            n = first.fetch(masked, 1)
+            key = n == 1 ? masked : "#{masked} (#{n})"
             while taken.key?(key)
-              key = "#{masked} (#{n})"
               n += 1
+              key = "#{masked} (#{n})"
             end
+            first[masked] = n + 1
             taken.delete(name)
+            freed(first, name)
             taken[key] = true
             new_keys[out_key] = key
             @count += findings
           end
           out.to_h { |k, v| [new_keys.fetch(k, k), v] }
+        end
+
+        # A name set free may be what its masked name, or the one it numbers,
+        # should try first.
+        def freed(first, name)
+          first[name] = 1 if first.key?(name)
+          base, n = NUMBERED.match(name)&.captures
+          first[base] = [first[base], n.to_i].min if base && n.to_i >= 2 && first.key?(base)
         end
 
         def key_text(key)

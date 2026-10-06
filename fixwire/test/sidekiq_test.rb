@@ -64,4 +64,12 @@ class SidekiqTest < Minitest::Test
     assert_equal 2, @ingest.spans.find { |s| s["name"] == "SendInvoiceJob" }["status"]["code"]
     assert_nil Fixwire.hub.scope.transaction, "the job's scope ended"
   end
+
+  def test_runs_jobs_whatever_their_payload_holds
+    @ingest.init(traces_sample_rate: 1.0)
+    Sidekiq::Client.push("class" => ReserveStockJob, "args" => ["sku_2"], "fixwire" => %w[not a trace])
+    Fixwire.flush
+
+    assert_equal(["ReserveStockJob"], @ingest.spans.map { |s| s["name"] })
+  end
 end

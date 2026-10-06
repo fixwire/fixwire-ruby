@@ -192,4 +192,11 @@ class RailsTest < Minitest::Test
     assert_equal "SendInvoiceJob", e["fixwire.contexts"]["job"]["class"]
     assert_equal 2, INGEST.span("SendInvoiceJob")["status"]["code"]
   end
+
+  def test_runs_jobs_whatever_their_payload_holds
+    ActiveJob::Base.execute(ReserveStockJob.new("sku_2").serialize.merge("fixwire" => %w[not a trace]))
+    Fixwire.flush
+
+    assert_equal "queue.process", INGEST.kv(INGEST.span("ReserveStockJob")["attributes"])["fixwire.op"]
+  end
 end

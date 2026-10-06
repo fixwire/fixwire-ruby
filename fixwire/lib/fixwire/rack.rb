@@ -21,7 +21,9 @@ module Fixwire
         return @app.call(env) unless hub.enabled?
 
         hub.with_scope do
-          tracked = ServerRequest.start(hub, env["REQUEST_METHOD"], url(env), headers(env), client_address: client_address(env))
+          tracked = track(hub, env)
+          return @app.call(env) if tracked.nil?
+
           tracked.request.route_provider = -> { Middleware.route(env) }
           env["fixwire.server_request"] = tracked
           begin
@@ -44,12 +46,21 @@ module Fixwire
       # The route the request matched, without Rails's optional format.
       def self.route(env)
         route = env["fixwire.route"] || env["action_dispatch.route_uri_pattern"]
-        return route.sub("(.:format)", "") if route
+        return route.to_s.sub("(.:format)", "") if route
 
         env["sinatra.route"]&.split(" ", 2)&.last
       end
 
       private
+
+      # The request's tracking, or nil when it can't be read (text in clashing encodings, say): the
+      # request goes on untracked.
+      def track(hub, env)
+        ServerRequest.start(hub, env["REQUEST_METHOD"], url(env), headers(env), client_address: client_address(env))
+      rescue StandardError => e
+        hub.client.log("tracking a request failed: #{e.message}")
+        nil
+      end
 
       def capture(hub, exception)
         hub.capture_exception(exception, mechanism: @mechanism, handled: false) unless hub.client.captured?(exception)

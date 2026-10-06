@@ -131,4 +131,19 @@ class IntegrationsTest < Minitest::Test
       c.values_at("category", "message", "level")
     end)
   end
+
+  def test_logging_while_keeping_a_log_record_does_not_recurse
+    log = Logger.new(StringIO.new)
+    keep = lambda do |crumb|
+      log.info("seen")
+      log.info("seen again")
+      crumb
+    end
+    @ingest.init(breadcrumbs_logger: true, before_breadcrumb: keep)
+    log.info("cart loaded")
+    Fixwire.capture_message("x")
+    Fixwire.flush
+
+    assert_equal(["cart loaded"], attrs(@ingest.log_records.first)["fixwire.breadcrumbs"].map { |c| c["message"] })
+  end
 end
