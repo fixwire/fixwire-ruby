@@ -4,7 +4,7 @@ All notable changes to the Fixwire Ruby SDK are listed here. Versions follow [Se
 Versioning](https://semver.org); before 1.0, a minor version may change the
 API.
 
-## [Unreleased]
+## [0.1.1] - 2026-10-06
 
 - `Fixwire.init` never raises. An unknown option (a keyword, or set in the block) is reported on stderr and ignored, and the rest of the options still apply (it used to raise `ArgumentError`). A broken DSN is reported on stderr even without `debug`, and the SDK stays off. Any other failure in `init`, such as the block raising, is reported the same way: the SDK stays off and `init` returns `nil`.
 - A forked child (Puma's and Unicorn's workers) starts its sender at once, so it sends its request sessions even when it captures nothing, and leaves the parent's sessions to the parent.
