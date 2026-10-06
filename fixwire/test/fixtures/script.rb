@@ -4,6 +4,7 @@
 
 $LOAD_PATH.unshift(File.expand_path("../../lib", __dir__))
 require "fixwire"
+require "rbconfig"
 
 Fixwire.init(release: "shop@1.0.0", project_root: File.expand_path("../..", __dir__), auto_session_tracking: false)
 Fixwire.add_breadcrumb(category: "script", message: "started")
@@ -18,9 +19,15 @@ when "exit" then exit 1
 when "interrupt" then raise Interrupt
 when "fork"
   Fixwire.capture_message("from the parent")
-  pid = fork do
-    Fixwire.capture_message("from the child") # the parent's worker thread is gone here
+  if Process.respond_to?(:fork)
+    pid = fork do
+      Fixwire.capture_message("from the child") # the parent's worker thread is gone here
+    end
+    Process.wait(pid)
+  else
+    # Windows has no fork: the child is a process of its own, as Windows starts them.
+    system(RbConfig.ruby, __FILE__, "child", exception: true)
   end
-  Process.wait(pid)
+when "child" then Fixwire.capture_message("from the child")
 when "message" then Fixwire.capture_message("nightly report sent")
 end

@@ -45,6 +45,8 @@ class ProcessTest < Minitest::Test
     assert_equal "nightly report sent", FakeIngest.value(log_records(1)[0]["body"])
   end
 
+  # A forked child restarts the sender it lost; on Windows, which has no fork, the child is a
+  # process of its own. Either way both are sent.
   def test_keeps_sending_after_a_fork
     assert_equal 0, script("fork").first
     messages = log_records(2).map { |r| FakeIngest.value(r["body"]) }.sort

@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "rbconfig"
+
 require "minitest/autorun"
 require "net/http"
 require "json"
@@ -26,7 +28,7 @@ class ExampleTest < Minitest::Test
   def test_the_api
     port = free_port
     log = "#{Dir.tmpdir}/fixwire-rails-example-#{port}.log"
-    pid = spawn(@env, "bundle", "exec", "puma", "config.ru", "-b", "tcp://127.0.0.1:#{port}", chdir: ROOT, %i[out err] => log)
+    pid = start_server(@env, "bundle", "exec", "puma", "config.ru", "-b", "tcp://127.0.0.1:#{port}", chdir: ROOT, %i[out err] => log)
     wait_for(port)
     base = "http://127.0.0.1:#{port}"
 
@@ -36,8 +38,7 @@ class ExampleTest < Minitest::Test
     assert_equal 402, http(:post, "#{base}/orders", '{"order":{"sku":"sku_2","card":"4000000000000002"}}', "X-User-Id" => "user-2")
     assert_equal 500, http(:get, "#{base}/admin/report")
     reservations = @inventory.received(2) # the jobs ran
-    Process.kill("TERM", pid) # Puma stops; Fixwire sends what is left
-    Process.wait(pid)
+    stop_server(pid) # Puma stops; Fixwire sends what is left
     requests = @ingest.received(3)
     events = events(requests)
 
@@ -87,6 +88,20 @@ class ExampleTest < Minitest::Test
   end
 
   private
+
+  # Starts a server so the system can stop it: on Windows in a process group of its own, so
+  # Ctrl-Break reaches it alone. Ruby runs Bundler itself (no bundle.bat in between).
+  def start_server(env, *command, **options)
+    options[:new_pgroup] = true if Gem.win_platform?
+    spawn(env, RbConfig.ruby, "-S", *command, **options)
+  end
+
+  # Stops it as the system stops a program: SIGTERM, or Ctrl-Break on Windows (Ruby's :INT for a
+  # process group).
+  def stop_server(pid)
+    Process.kill(Gem.win_platform? ? :INT : :TERM, pid)
+    Process.wait(pid)
+  end
 
   def events(requests)
     requests.select { |r| r[:path] == "/v1/logs" }.each_with_object({}) do |r, out|

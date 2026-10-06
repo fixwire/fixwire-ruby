@@ -20,6 +20,7 @@ jobs:
         include:
           - { os: ubuntu-latest, ruby: "3.2", sidekiq: "~> 7.0" } # the oldest Ruby, and Sidekiq 7
           - { os: macos-latest, ruby: "3.4" }
+          - { os: windows-latest, ruby: "3.4" }
     env:
       SIDEKIQ_VERSION: ${{ matrix.sidekiq || '>= 7.0' }}
     defaults:
@@ -39,8 +40,8 @@ jobs:
         run: bundle install && bundle exec ruby test/examples_test.rb
 
   rails:
-    name: fixwire-rails, Rails ${{ matrix.rails }}, Ruby ${{ matrix.ruby }}
-    runs-on: ubuntu-latest
+    name: fixwire-rails, Rails ${{ matrix.rails }}, Ruby ${{ matrix.ruby }}${{ matrix.os && format(', {0}', matrix.os) || '' }}
+    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -50,6 +51,8 @@ jobs:
           - { rails: "8.0", ruby: "3.4", json: "< 3" }
           - { rails: "8.1", ruby: "3.2" }
           - { rails: "8.1", ruby: "4.0" }
+          - { rails: "8.1", ruby: "3.4", os: macos-latest }
+          - { rails: "8.1", ruby: "3.4", os: windows-latest }
     env:
       RAILS_VERSION: "~> ${{ matrix.rails }}.0"
       JSON_VERSION: ${{ matrix.json }}
