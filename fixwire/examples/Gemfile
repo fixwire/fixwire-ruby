@@ -1,0 +1,15 @@
+# frozen_string_literal: true
+
+source "https://rubygems.org"
+
+# The examples install the SDK from this repository; an app of yours adds `gem "fixwire"`.
+gem "fixwire", path: ".."
+
+gem "logger"
+gem "puma", "~> 6.4"
+gem "rackup", "~> 2.1"
+gem "sinatra", "~> 4.0"
+
+group :test do
+  gem "minitest", "~> 5.25"
+end
